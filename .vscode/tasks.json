@@ -5,8 +5,11 @@
             "label": "C/C++: cl.exe build active file",
             "command": "cl.exe",
             "args": [
+                "/D_DEBUG",
                 "/Zi",
                 "/EHsc",
+                "/Wall",
+                "/external:W0",
                 "/nologo",
                 "/Fe${fileDirname}\\${fileBasenameNoExtension}.exe",
                 "${file}"

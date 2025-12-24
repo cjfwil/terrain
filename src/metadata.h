@@ -34,7 +34,7 @@ static bool SetExtendedMetadata(void)
     }
     else
     {
-        int i;
+        unsigned int i;
         for (i = 0; i < SDL_arraysize(extended_metadata); i++)
         {
             if (!SDL_SetAppMetadataProperty(extended_metadata[i].key, extended_metadata[i].value))
