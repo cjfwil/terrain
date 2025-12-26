@@ -17,7 +17,7 @@
 
 const char *HRESULT_Message(HRESULT hr)
 {
-    static char buffer[512];
+    thread_local char buffer[512];
     DWORD chars = FormatMessageA(
         FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
         NULL, (DWORD)hr, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),

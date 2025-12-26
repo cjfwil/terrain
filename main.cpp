@@ -1,11 +1,14 @@
 #pragma comment(lib, "SDL3.lib")
 #pragma comment(lib, "d3d12.lib")
 #pragma comment(lib, "dxgi.lib")
+#pragma comment(lib, "d3dcompiler.lib")
 
 #pragma warning(push, 0)
 #include <directx/d3dx12.h>
 #include <dxgi1_6.h>
 #include <dxgi1_2.h>
+#include <d3dcompiler.h>
+#include <DirectXMath.h>
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_thread.h>
@@ -161,7 +164,7 @@ int main(void)
     }
     UINT rtvDescriptorSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
 
-    // create frame resources    
+    // create frame resources
     CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(rtvHeap->GetCPUDescriptorHandleForHeapStart());
 
     ID3D12Resource *renderTargets[bufferCount] = {};
@@ -186,6 +189,74 @@ int main(void)
     }
 
     // load assets
+    CD3DX12_ROOT_SIGNATURE_DESC rootSignatureDesc;
+    rootSignatureDesc.Init(0, nullptr, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
+    ID3DBlob *signature;
+    ID3DBlob *error;
+    hr = D3D12SerializeRootSignature(&rootSignatureDesc, D3D_ROOT_SIGNATURE_VERSION_1, &signature, &error);
+    if (FAILED(hr))
+    {
+        errhr("D3D12SerializeRootSignature failed", hr);
+        return 1;
+    }
+    ID3D12RootSignature *rootSignature = nullptr;
+    hr = device->CreateRootSignature(0, signature->GetBufferPointer(), signature->GetBufferSize(), IID_PPV_ARGS(&rootSignature));
+    if (FAILED(hr))
+    {
+        errhr("CreateRootSignature failed", hr);
+        return 1;
+    }
+
+    // create pipelin state (including shaders)
+    ID3DBlob *vertexShader = nullptr;
+    ID3DBlob *pixelShader = nullptr;
+#if defined(_DEBUG)
+    // Enable better shader debugging with the graphics debugging tools.
+    UINT compileFlags = D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
+#else
+    UINT compileFlags = 0;
+#endif
+
+    hr = D3DCompileFromFile(L"shaders.hlsl", nullptr, nullptr, "VSMain", "vs_5_0", compileFlags, 0, &vertexShader, nullptr);
+    if (FAILED(hr))
+    {
+        errhr("D3DCompile from file failed (vertex shader)", hr);
+        return 1;
+    }
+    hr = D3DCompileFromFile(L"shaders.hlsl", nullptr, nullptr, "PSMain", "ps_5_0", compileFlags, 0, &pixelShader, nullptr);
+    if (FAILED(hr))
+    {
+        errhr("D3DCompile from file failed (pixel shader)", hr);
+        return 1;
+    }
+
+    D3D12_INPUT_ELEMENT_DESC inputElementDesc[] =
+        {
+            {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+            {"COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0}};
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
+    psoDesc.InputLayout = {inputElementDesc, _countof(inputElementDesc)};
+    psoDesc.pRootSignature = rootSignature;
+    psoDesc.VS = CD3DX12_SHADER_BYTECODE(vertexShader);
+    psoDesc.PS = CD3DX12_SHADER_BYTECODE(pixelShader);
+    psoDesc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
+    psoDesc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
+    psoDesc.DepthStencilState.DepthEnable = FALSE;
+    psoDesc.DepthStencilState.StencilEnable = FALSE;
+    psoDesc.SampleMask = UINT_MAX;
+    psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    psoDesc.NumRenderTargets = 1;
+    psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+    psoDesc.SampleDesc.Count = 1;
+    ID3D12PipelineState *pipelineState = nullptr;
+    hr = device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&pipelineState));
+    if (FAILED(hr))
+    {
+        errhr("CreateGraphicsPipelineState failed", hr);
+        return 1;
+    }
+
     ID3D12GraphicsCommandList *commandList = nullptr;
     hr = device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, commandAllocator, nullptr, IID_PPV_ARGS(&commandList));
     if (FAILED(hr))
@@ -194,14 +265,46 @@ int main(void)
         return 1;
     }
 
-    // assets get loaded here
-
+    // FROM MICROSOFT:
+    // Command lists are created in the recording state, but there is nothing
+    // to record yet. The main loop expects it to be closed, so close it now.
     hr = commandList->Close();
     if (FAILED(hr))
     {
         errhr("Failed to Close command list", hr);
         return 1;
     }
+
+    // vertex
+    struct vertex
+    {
+        DirectX::XMFLOAT3 position;
+        DirectX::XMFLOAT4 colour;
+    };
+
+    const float aspectRatio = 16.0f / 9.0f;
+    vertex triangleVertices[] = {
+        {{0.0f, 0.25f * aspectRatio, 0.0f}, {1.0f, 0.0f, 0.0f, 1.0f}},
+        {{0.25f, -0.25f * aspectRatio, 0.0f}, {0.0f, 1.0f, 0.0f, 1.0f}},
+        {{-0.25f, -0.25f * aspectRatio, 0.0f}, {0.0f, 0.0f, 1.0f, 1.0f}}};
+
+    const UINT vertexBuffersize = sizeof(triangleVertices);
+
+    // FROM MICROSOFT:
+    // Note: using upload heaps to transfer static data like vert buffers is not
+    // recommended. Every time the GPU needs it, the upload heap will be marshalled
+    // over. Please read up on Default Heap usage. An upload heap is used here for
+    // code simplicity and because there are very few verts to actually transfer.
+    ID3D12Resource* vertexBuffer = nullptr;
+    hr = device->CreateCommittedResource(&CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD), D3D12_HEAP_FLAG_NONE, &CD3DX12_RESOURCE_DESC::Buffer(vertexBuffersize), D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&vertexBuffer));
+    UINT* vertexDataBegin = nullptr;
+    CD3DX12_RANGE readRange(0,0);
+    hr = vertexBuffer->Map(0, &readRange, (void**)&vertexDataBegin);
+    if (FAILED(hr)) {
+        errhr("Map failed (vertex buffer)", hr);
+        return 1;
+    }
+
 
     // create synchronisation objects
     ID3D12Fence *fence = nullptr;
@@ -218,13 +321,11 @@ int main(void)
     fenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
     if (fenceEvent == nullptr)
     {
-        errhr("CreateEvent failed (fenceEvent)", hr);
+        err("CreateEvent failed (fenceEvent)");
         return 1;
     }
 
-    // other members
-    ID3D12PipelineState *pipelineState = nullptr;
-
+    // main program
     programState.isRunning = true;
     while (programState.isRunning)
     {
@@ -244,7 +345,7 @@ int main(void)
         // update here
 
         // render here
-        //populate command list
+        // populate command list
         commandAllocator->Reset();
         commandList->Reset(commandAllocator, pipelineState);
         commandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(renderTargets[frameIndex], D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET));
@@ -255,44 +356,49 @@ int main(void)
         commandList->ClearRenderTargetView(rtvHandlePerFrame, clearColour, 0, nullptr);
         commandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(renderTargets[frameIndex], D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT));
         hr = commandList->Close();
-        if (FAILED(hr)) {
+        if (FAILED(hr))
+        {
             errhr("Failed to close command list (frame rendering)", hr);
-            return 1;            
+            return 1;
         }
-        //end of populating command list
+        // end of populating command list
 
-        //execute command list
-        ID3D12CommandList* commandLists[] = {commandList};
+        // execute command list
+        ID3D12CommandList *commandLists[] = {commandList};
         commandQueue->ExecuteCommandLists(_countof(commandLists), commandLists);
 
         hr = swapChain->Present(1, 0);
-        if (FAILED(hr)) {
+        if (FAILED(hr))
+        {
             errhr("Present failed", hr);
             return 1;
         }
 
-        //wait for prev frame (d3d11 style)
-        // TODO: switch to more d3d12 style frame buffering (no waiting)
-        const UINT localFenceValue = fenceValue; // DO NOT ACCIDENTLY CHANGE THE FENCE VALUE HERE, it needs to be the same thats why we are creating a const copy
+        // wait for prev frame (d3d11 style)
+        //  TODO: switch to more d3d12 style frame buffering (no waiting)
+        const UINT64 localFenceValue = fenceValue; // DO NOT ACCIDENTLY CHANGE THE FENCE VALUE HERE, it needs to be the same thats why we are creating a const copy
         hr = commandQueue->Signal(fence, localFenceValue);
-        if (FAILED(hr)) {
+        if (FAILED(hr))
+        {
             errhr("Signal failed (command queue)", hr);
             return 1;
         }
-        fenceValue++; //this is deliberate
+        fenceValue++; // now we chan change it this is deliberate
 
-        //waiting (d3d11 style)
-        if (fence->GetCompletedValue() < localFenceValue) {
+        // waiting (d3d11 style)
+        if (fence->GetCompletedValue() < localFenceValue)
+        {
             hr = fence->SetEventOnCompletion(localFenceValue, fenceEvent);
-            if (FAILED(hr)) {
+            if (FAILED(hr))
+            {
                 errhr("SetEventOnCompletion failed", hr);
-                return 1;                
+                return 1;
             }
             WaitForSingleObject(fenceEvent, INFINITE);
         }
 
         frameIndex = swapChain->GetCurrentBackBufferIndex();
-        //end of waiting
+        // end of waiting
 
         programState.ticksElapsed++;
     }
