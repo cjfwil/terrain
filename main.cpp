@@ -64,10 +64,10 @@ int main(void)
 
     HRESULT hr = S_OK;
 
-    IDXGIFactory6 *factory = nullptr;    
+    IDXGIFactory6 *factory = nullptr;
     hr = CreateDXGIFactory2(dxgiFactoryFlags, IID_PPV_ARGS(&factory));
     if (FAILED(hr))
-    {        
+    {
         errhr("CreateDXGIFactory2 failed", hr);
         return 1;
     }
@@ -76,7 +76,7 @@ int main(void)
 
     hr = factory->EnumAdapterByGpuPreference(0, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE, IID_PPV_ARGS(&hardwareAdapter));
     if (FAILED(hr))
-    {        
+    {
         errhr("EnumAdapterByGpuPreference failed", hr);
         return 1;
     }
@@ -84,7 +84,7 @@ int main(void)
     ID3D12Device *device = nullptr;
     hr = D3D12CreateDevice(hardwareAdapter, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device));
     if (FAILED(hr))
-    {        
+    {
         errhr("D3D12CreateDevice failed", hr);
         return 1;
     }
@@ -99,7 +99,7 @@ int main(void)
     ID3D12CommandQueue *commandQueue = nullptr;
     hr = device->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(&commandQueue));
     if (FAILED(hr))
-    {        
+    {
         errhr("CreateCommandQueue failed", hr);
         return 1;
     }
@@ -123,15 +123,15 @@ int main(void)
     HWND hwnd = nullptr;
     hwnd = (HWND)SDL_GetPointerProperty(props, SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL);
     if (!hwnd)
-    {        
-        errhr("Failed to get HWND",hr);
+    {
+        errhr("Failed to get HWND", hr);
         return 1;
     }
 
     IDXGISwapChain1 *swapChain1 = nullptr;
     hr = factory->CreateSwapChainForHwnd(commandQueue, hwnd, &swapChainDesc, nullptr, nullptr, &swapChain1);
     if (FAILED(hr))
-    {        
+    {
         errhr("CreateSwapChainForHwnd failed", hr);
         return 1;
     }
@@ -139,7 +139,7 @@ int main(void)
     IDXGISwapChain4 *swapChain = nullptr;
     hr = swapChain1->QueryInterface(IID_PPV_ARGS(&swapChain));
     if (FAILED(hr))
-    {        
+    {
         errhr("QueryInterface on swapChain1 failed", hr);
         return 1;
     }
@@ -155,13 +155,13 @@ int main(void)
     ID3D12DescriptorHeap *rtvHeap = nullptr;
     hr = device->CreateDescriptorHeap(&rtvHeapDesc, IID_PPV_ARGS(&rtvHeap));
     if (FAILED(hr))
-    {        
+    {
         errhr("CreateDescriptorHeap failed", hr);
         return 1;
     }
     UINT rtvDescriptorSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
 
-    // create frame resources
+    // create frame resources    
     CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(rtvHeap->GetCPUDescriptorHandleForHeapStart());
 
     ID3D12Resource *renderTargets[bufferCount] = {};
@@ -170,13 +170,60 @@ int main(void)
     {
         hr = swapChain->GetBuffer(n, IID_PPV_ARGS(&renderTargets[n]));
         if (FAILED(hr))
-        {            
+        {
             errhr("GetBuffer failed", hr);
             return 1;
         }
         device->CreateRenderTargetView(renderTargets[n], nullptr, rtvHandle);
         rtvHandle.Offset(1, rtvDescriptorSize);
     }
+    ID3D12CommandAllocator *commandAllocator = nullptr;
+    hr = device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&commandAllocator));
+    if (FAILED(hr))
+    {
+        errhr("CreateCommandAllocator failed", hr);
+        return 1;
+    }
+
+    // load assets
+    ID3D12GraphicsCommandList *commandList = nullptr;
+    hr = device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, commandAllocator, nullptr, IID_PPV_ARGS(&commandList));
+    if (FAILED(hr))
+    {
+        errhr("CreateCommandList failed", hr);
+        return 1;
+    }
+
+    // assets get loaded here
+
+    hr = commandList->Close();
+    if (FAILED(hr))
+    {
+        errhr("Failed to Close command list", hr);
+        return 1;
+    }
+
+    // create synchronisation objects
+    ID3D12Fence *fence = nullptr;
+    UINT64 fenceValue = 0;
+    hr = device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence));
+    fenceValue = 1;
+    if (FAILED(hr))
+    {
+        errhr("CreateFence failed", hr);
+        return 1;
+    }
+
+    HANDLE fenceEvent = nullptr;
+    fenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+    if (fenceEvent == nullptr)
+    {
+        errhr("CreateEvent failed (fenceEvent)", hr);
+        return 1;
+    }
+
+    // other members
+    ID3D12PipelineState *pipelineState = nullptr;
 
     programState.isRunning = true;
     while (programState.isRunning)
@@ -194,6 +241,58 @@ int main(void)
         programState.msElapsedSinceSDLInit = SDL_GetTicks();
 
         // main loop main body
+        // update here
+
+        // render here
+        //populate command list
+        commandAllocator->Reset();
+        commandList->Reset(commandAllocator, pipelineState);
+        commandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(renderTargets[frameIndex], D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET));
+        CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandlePerFrame(rtvHeap->GetCPUDescriptorHandleForHeapStart(), frameIndex, rtvDescriptorSize);
+
+        // commands
+        const float clearColour[4] = {0.0f, 0.2f, 0.4f, 1.0f};
+        commandList->ClearRenderTargetView(rtvHandlePerFrame, clearColour, 0, nullptr);
+        commandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(renderTargets[frameIndex], D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT));
+        hr = commandList->Close();
+        if (FAILED(hr)) {
+            errhr("Failed to close command list (frame rendering)", hr);
+            return 1;            
+        }
+        //end of populating command list
+
+        //execute command list
+        ID3D12CommandList* commandLists[] = {commandList};
+        commandQueue->ExecuteCommandLists(_countof(commandLists), commandLists);
+
+        hr = swapChain->Present(1, 0);
+        if (FAILED(hr)) {
+            errhr("Present failed", hr);
+            return 1;
+        }
+
+        //wait for prev frame (d3d11 style)
+        // TODO: switch to more d3d12 style frame buffering (no waiting)
+        const UINT localFenceValue = fenceValue; // DO NOT ACCIDENTLY CHANGE THE FENCE VALUE HERE, it needs to be the same thats why we are creating a const copy
+        hr = commandQueue->Signal(fence, localFenceValue);
+        if (FAILED(hr)) {
+            errhr("Signal failed (command queue)", hr);
+            return 1;
+        }
+        fenceValue++; //this is deliberate
+
+        //waiting (d3d11 style)
+        if (fence->GetCompletedValue() < localFenceValue) {
+            hr = fence->SetEventOnCompletion(localFenceValue, fenceEvent);
+            if (FAILED(hr)) {
+                errhr("SetEventOnCompletion failed", hr);
+                return 1;                
+            }
+            WaitForSingleObject(fenceEvent, INFINITE);
+        }
+
+        frameIndex = swapChain->GetCurrentBackBufferIndex();
+        //end of waiting
 
         programState.ticksElapsed++;
     }

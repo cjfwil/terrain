@@ -8,6 +8,7 @@
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "%s: %s", msg, SDL_GetError()); \
     } while (0)
 
+    //pass a plain text message and a windows HRESULT
 #define errhr(msg, hr)                                                                                        \
     do                                                                                                    \
     {                                                                                                     \
