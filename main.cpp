@@ -28,8 +28,8 @@ static struct
 
 int main(void)
 {
-    int width = 1280;
-    int height = 720;
+    int width = 1920;
+    int height = 1080;
 
     if (!SetExtendedMetadata())
         return 1;
@@ -40,7 +40,7 @@ int main(void)
         return 1;
     }
 
-    programState.window = SDL_CreateWindow(APP_WINDOW_TITLE, (int)width, (int)height, 0);
+    programState.window = SDL_CreateWindow(APP_WINDOW_TITLE, (int)width, (int)height, SDL_WINDOW_FULLSCREEN);
     if (!programState.window)
     {
         err("SDL_CreateWindow failed");
@@ -165,7 +165,7 @@ int main(void)
     UINT rtvDescriptorSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
 
     // create frame resources
-    CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(rtvHeap->GetCPUDescriptorHandleForHeapStart());
+    CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandleSetup(rtvHeap->GetCPUDescriptorHandleForHeapStart());
 
     ID3D12Resource *renderTargets[bufferCount] = {};
     // rtv for each buffer (double or triple buffering)
@@ -177,8 +177,8 @@ int main(void)
             errhr("GetBuffer failed", hr);
             return 1;
         }
-        device->CreateRenderTargetView(renderTargets[n], nullptr, rtvHandle);
-        rtvHandle.Offset(1, rtvDescriptorSize);
+        device->CreateRenderTargetView(renderTargets[n], nullptr, rtvHandleSetup);
+        rtvHandleSetup.Offset(1, rtvDescriptorSize);
     }
     ID3D12CommandAllocator *commandAllocator = nullptr;
     hr = device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&commandAllocator));
@@ -288,23 +288,30 @@ int main(void)
         {{0.25f, -0.25f * aspectRatio, 0.0f}, {0.0f, 1.0f, 0.0f, 1.0f}},
         {{-0.25f, -0.25f * aspectRatio, 0.0f}, {0.0f, 0.0f, 1.0f, 1.0f}}};
 
-    const UINT vertexBuffersize = sizeof(triangleVertices);
+    const UINT vertexBufferSize = sizeof(triangleVertices);
 
     // FROM MICROSOFT:
     // Note: using upload heaps to transfer static data like vert buffers is not
     // recommended. Every time the GPU needs it, the upload heap will be marshalled
     // over. Please read up on Default Heap usage. An upload heap is used here for
     // code simplicity and because there are very few verts to actually transfer.
-    ID3D12Resource* vertexBuffer = nullptr;
-    hr = device->CreateCommittedResource(&CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD), D3D12_HEAP_FLAG_NONE, &CD3DX12_RESOURCE_DESC::Buffer(vertexBuffersize), D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&vertexBuffer));
-    UINT* vertexDataBegin = nullptr;
-    CD3DX12_RANGE readRange(0,0);
-    hr = vertexBuffer->Map(0, &readRange, (void**)&vertexDataBegin);
-    if (FAILED(hr)) {
+    ID3D12Resource *vertexBuffer = nullptr;
+    hr = device->CreateCommittedResource(&CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD), D3D12_HEAP_FLAG_NONE, &CD3DX12_RESOURCE_DESC::Buffer(vertexBufferSize), D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&vertexBuffer));
+    UINT *vertexDataBegin = nullptr;
+    CD3DX12_RANGE readRange(0, 0);
+    hr = vertexBuffer->Map(0, &readRange, (void **)&vertexDataBegin);
+    if (FAILED(hr))
+    {
         errhr("Map failed (vertex buffer)", hr);
         return 1;
     }
+    memcpy(vertexDataBegin, triangleVertices, sizeof(triangleVertices));
+    vertexBuffer->Unmap(0, nullptr);
 
+    D3D12_VERTEX_BUFFER_VIEW vertexBufferView = {};
+    vertexBufferView.BufferLocation = vertexBuffer->GetGPUVirtualAddress();
+    vertexBufferView.StrideInBytes = sizeof(vertex);
+    vertexBufferView.SizeInBytes = vertexBufferSize;
 
     // create synchronisation objects
     ID3D12Fence *fence = nullptr;
@@ -324,6 +331,20 @@ int main(void)
         err("CreateEvent failed (fenceEvent)");
         return 1;
     }
+
+    static CD3DX12_VIEWPORT viewport = {};
+    viewport.TopLeftX = 0.0f;
+    viewport.TopLeftY = 0.0f;
+    viewport.Width = static_cast<float>(width);
+    viewport.Height = static_cast<float>(height);
+    viewport.MinDepth = 0.0f;
+    viewport.MaxDepth = 1.0f;
+    
+    static CD3DX12_RECT scissorRect = {};
+    scissorRect.left = 0;
+    scissorRect.top = 0;
+    scissorRect.right = static_cast<LONG>(width);
+    scissorRect.bottom = static_cast<LONG>(height);
 
     // main program
     programState.isRunning = true;
@@ -348,12 +369,23 @@ int main(void)
         // populate command list
         commandAllocator->Reset();
         commandList->Reset(commandAllocator, pipelineState);
+
+        commandList->SetGraphicsRootSignature(rootSignature);
+        commandList->RSSetViewports(1, &viewport);
+        commandList->RSSetScissorRects(1, &scissorRect);
+
         commandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(renderTargets[frameIndex], D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET));
+
         CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandlePerFrame(rtvHeap->GetCPUDescriptorHandleForHeapStart(), frameIndex, rtvDescriptorSize);
+        commandList->OMSetRenderTargets(1, &rtvHandlePerFrame, FALSE, nullptr);
 
         // commands
         const float clearColour[4] = {0.0f, 0.2f, 0.4f, 1.0f};
         commandList->ClearRenderTargetView(rtvHandlePerFrame, clearColour, 0, nullptr);
+        commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        commandList->IASetVertexBuffers(0, 1, &vertexBufferView);
+        commandList->DrawInstanced(3, 1, 0, 0);
+
         commandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(renderTargets[frameIndex], D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT));
         hr = commandList->Close();
         if (FAILED(hr))
