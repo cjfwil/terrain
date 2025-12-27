@@ -1,7 +1,9 @@
+#pragma warning(disable : 5045) // disabling the spectre mitigation warning (not relevant because we are a game, no sensitive information should be in this program)
 #pragma comment(lib, "SDL3.lib")
 #pragma comment(lib, "d3d12.lib")
 #pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "d3dcompiler.lib")
+#pragma comment(lib, "dxguid.lib")
 
 #pragma warning(push, 0)
 #include <directx/d3dx12.h>
@@ -13,7 +15,6 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_thread.h>
 #pragma warning(pop)
-#pragma warning(disable : 5045) // disabling the spectre mitigation warning (not relevant because we are a game, no sensitive information should be in this program)
 
 #include "src/metadata.h"
 #include "src/error.h"
@@ -159,9 +160,21 @@ int main(void)
     hr = device->CreateDescriptorHeap(&rtvHeapDesc, IID_PPV_ARGS(&rtvHeap));
     if (FAILED(hr))
     {
-        errhr("CreateDescriptorHeap failed", hr);
+        errhr("CreateDescriptorHeap failed (rtvHeap)", hr);
         return 1;
     }
+
+    ID3D12DescriptorHeap *srvHeap = nullptr;
+    D3D12_DESCRIPTOR_HEAP_DESC srvHeapDesc = {};
+    srvHeapDesc.NumDescriptors = 1;
+    srvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+    srvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+    hr = device->CreateDescriptorHeap(&srvHeapDesc, IID_PPV_ARGS(&srvHeap));
+    if (FAILED(hr)) {
+        errhr("CreateDescriptorHeap failed (srvHeap)", hr);
+        return 1;
+    }
+
     UINT rtvDescriptorSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
 
     // create frame resources
@@ -189,11 +202,39 @@ int main(void)
     }
 
     // load assets
-    CD3DX12_ROOT_SIGNATURE_DESC rootSignatureDesc;
-    rootSignatureDesc.Init(0, nullptr, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
+    D3D12_FEATURE_DATA_ROOT_SIGNATURE featureData = {};
+    featureData.HighestVersion = D3D_ROOT_SIGNATURE_VERSION_1_1;
+    hr = device->CheckFeatureSupport(D3D12_FEATURE_ROOT_SIGNATURE, &featureData, sizeof(featureData));
+    if (FAILED(hr))
+    {
+        featureData.HighestVersion = D3D_ROOT_SIGNATURE_VERSION_1_0;
+    }
+
+    CD3DX12_DESCRIPTOR_RANGE1 ranges[1];
+    ranges[0].Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0, 0, D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC);
+    CD3DX12_ROOT_PARAMETER1 rootParameters[1];
+    rootParameters[0].InitAsDescriptorTable(1, &ranges[0], D3D12_SHADER_VISIBILITY_PIXEL);
+
+    D3D12_STATIC_SAMPLER_DESC sampler = {};
+    sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_POINT;
+    sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
+    sampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
+    sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
+    sampler.MipLODBias = 0;
+    sampler.MaxAnisotropy = 0;
+    sampler.ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER;
+    sampler.BorderColor = D3D12_STATIC_BORDER_COLOR_TRANSPARENT_BLACK;
+    sampler.MinLOD = 0.0f;
+    sampler.MaxLOD = D3D12_FLOAT32_MAX;
+    sampler.ShaderRegister = 0;
+    sampler.RegisterSpace = 0;
+    sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+
+    CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC rootSignatureDesc;
+    rootSignatureDesc.Init_1_1(_countof(rootParameters), rootParameters, 1, &sampler, D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
     ID3DBlob *signature;
     ID3DBlob *error;
-    hr = D3D12SerializeRootSignature(&rootSignatureDesc, D3D_ROOT_SIGNATURE_VERSION_1, &signature, &error);
+    hr = D3DX12SerializeVersionedRootSignature(&rootSignatureDesc, featureData.HighestVersion, &signature, &error);
     if (FAILED(hr))
     {
         errhr("D3D12SerializeRootSignature failed", hr);
@@ -207,7 +248,7 @@ int main(void)
         return 1;
     }
 
-    // create pipelin state (including shaders)
+    // create pipeline state (including shaders)
     ID3DBlob *vertexShader = nullptr;
     ID3DBlob *pixelShader = nullptr;
 #if defined(_DEBUG)
@@ -233,7 +274,7 @@ int main(void)
     D3D12_INPUT_ELEMENT_DESC inputElementDesc[] =
         {
             {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
-            {"COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0}};
+            {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0}};
 
     D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
     psoDesc.InputLayout = {inputElementDesc, _countof(inputElementDesc)};
@@ -265,28 +306,28 @@ int main(void)
         return 1;
     }
 
-    // FROM MICROSOFT:
-    // Command lists are created in the recording state, but there is nothing
-    // to record yet. The main loop expects it to be closed, so close it now.
-    hr = commandList->Close();
-    if (FAILED(hr))
-    {
-        errhr("Failed to Close command list", hr);
-        return 1;
-    }
+    // // FROM MICROSOFT:
+    // // Command lists are created in the recording state, but there is nothing
+    // // to record yet. The main loop expects it to be closed, so close it now.
+    // hr = commandList->Close();
+    // if (FAILED(hr))
+    // {
+    //     errhr("Failed to Close command list", hr);
+    //     return 1;
+    // }
 
     // vertex
     struct vertex
     {
         DirectX::XMFLOAT3 position;
-        DirectX::XMFLOAT4 colour;
+        DirectX::XMFLOAT2 texCoords;
     };
 
     const float aspectRatio = 16.0f / 9.0f;
     vertex triangleVertices[] = {
-        {{0.0f, 0.25f * aspectRatio, 0.0f}, {1.0f, 0.0f, 0.0f, 1.0f}},
-        {{0.25f, -0.25f * aspectRatio, 0.0f}, {0.0f, 1.0f, 0.0f, 1.0f}},
-        {{-0.25f, -0.25f * aspectRatio, 0.0f}, {0.0f, 0.0f, 1.0f, 1.0f}}};
+        {{0.0f, 0.25f * aspectRatio, 0.0f}, {0.5f, 0.0f}},
+        {{0.25f, -0.25f * aspectRatio, 0.0f}, {1.0f, 1.0f}},
+        {{-0.25f, -0.25f * aspectRatio, 0.0f}, {0.0f, 1.0f}}};
 
     const UINT vertexBufferSize = sizeof(triangleVertices);
 
@@ -312,6 +353,81 @@ int main(void)
     vertexBufferView.BufferLocation = vertexBuffer->GetGPUVirtualAddress();
     vertexBufferView.StrideInBytes = sizeof(vertex);
     vertexBufferView.SizeInBytes = vertexBufferSize;
+
+    const int texWidth = 16;
+    const int texHeight = 16;
+    unsigned int textureData[texWidth * texHeight] = {};    
+    for (int i = 0; i < texWidth * texHeight; ++i)
+    {
+        int x = i % texWidth;
+        int y = i / texHeight;
+        if ((x+y) % 2 == 0)
+            textureData[i] = 0xfffff000;
+        else
+            textureData[i] = 0xff000fff;
+    }
+
+    ID3D12Resource *textureUploadHeap = nullptr;
+    D3D12_RESOURCE_DESC textureDesc = {};
+    textureDesc.MipLevels = 1;
+    textureDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    textureDesc.Width = texWidth;
+    textureDesc.Height = texHeight;
+    textureDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
+    textureDesc.DepthOrArraySize = 1;
+    textureDesc.SampleDesc.Count = 1;
+    textureDesc.SampleDesc.Quality = 0;
+    textureDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+
+    ID3D12Resource *texture = nullptr;
+    hr = device->CreateCommittedResource(
+        &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT),
+        D3D12_HEAP_FLAG_NONE,
+        &textureDesc,
+        D3D12_RESOURCE_STATE_COPY_DEST,
+        nullptr,
+        IID_PPV_ARGS(&texture));
+    if (FAILED(hr))
+    {
+        errhr("CreateCommittedResource (texture)", hr);
+        return 1;
+    }
+    const UINT64 uploadBufferSize = GetRequiredIntermediateSize(texture, 0, 1);
+
+    // gpu upload buffer
+    hr = device->CreateCommittedResource(
+        &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD),
+        D3D12_HEAP_FLAG_NONE,
+        &CD3DX12_RESOURCE_DESC::Buffer(uploadBufferSize),
+        D3D12_RESOURCE_STATE_GENERIC_READ,
+        nullptr,
+        IID_PPV_ARGS(&textureUploadHeap));
+    if (FAILED(hr))
+    {
+        errhr("CreateCommittedResource failed (gpu upload buffer)", hr);
+        return 1;
+    }
+
+    D3D12_SUBRESOURCE_DATA textureDataDesc = {};
+    textureDataDesc.pData = textureData;
+    textureDataDesc.RowPitch = texWidth * sizeof(textureData[0]);
+    textureDataDesc.SlicePitch = textureDataDesc.RowPitch * texHeight;
+
+    UpdateSubresources(commandList, texture, textureUploadHeap, 0, 0, 1, &textureDataDesc);
+    commandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(texture, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE));
+
+    // SRV for texture
+    
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srvDesc.Format = textureDesc.Format;
+    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    srvDesc.Texture2D.MipLevels = 1;
+    device->CreateShaderResourceView(texture, &srvDesc, srvHeap->GetCPUDescriptorHandleForHeapStart());
+
+    commandList->Close();
+    ID3D12CommandList *commandListsSetup[] = {commandList};
+    commandQueue->ExecuteCommandLists(_countof(commandListsSetup), commandListsSetup);
 
     // create synchronisation objects
     ID3D12Fence *fence = nullptr;
@@ -339,7 +455,7 @@ int main(void)
     viewport.Height = static_cast<float>(height);
     viewport.MinDepth = 0.0f;
     viewport.MaxDepth = 1.0f;
-    
+
     static CD3DX12_RECT scissorRect = {};
     scissorRect.left = 0;
     scissorRect.top = 0;
@@ -371,6 +487,11 @@ int main(void)
         commandList->Reset(commandAllocator, pipelineState);
 
         commandList->SetGraphicsRootSignature(rootSignature);
+
+        ID3D12DescriptorHeap *heaps[] = {srvHeap};
+        commandList->SetDescriptorHeaps(_countof(heaps), heaps);
+
+        commandList->SetGraphicsRootDescriptorTable(0, srvHeap->GetGPUDescriptorHandleForHeapStart());
         commandList->RSSetViewports(1, &viewport);
         commandList->RSSetScissorRects(1, &scissorRect);
 
@@ -396,8 +517,8 @@ int main(void)
         // end of populating command list
 
         // execute command list
-        ID3D12CommandList *commandLists[] = {commandList};
-        commandQueue->ExecuteCommandLists(_countof(commandLists), commandLists);
+        ID3D12CommandList *commandListsPerFrame[] = {commandList};
+        commandQueue->ExecuteCommandLists(_countof(commandListsPerFrame), commandListsPerFrame);
 
         hr = swapChain->Present(1, 0);
         if (FAILED(hr))
