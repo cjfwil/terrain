@@ -27,6 +27,12 @@ static struct
     bool isRunning;
 } programState;
 
+static struct
+{
+    DirectX::XMFLOAT4 offset;
+    float padding[60]; // Padding so the constant buffer is 256-byte aligned.
+} constantBufferData;
+
 int main(void)
 {
 
@@ -167,7 +173,7 @@ int main(void)
 
     ID3D12DescriptorHeap *srvHeap = nullptr;
     D3D12_DESCRIPTOR_HEAP_DESC srvHeapDesc = {};
-    srvHeapDesc.NumDescriptors = 1;
+    srvHeapDesc.NumDescriptors = 2; // CBV + SRV
     srvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     srvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
     hr = device->CreateDescriptorHeap(&srvHeapDesc, IID_PPV_ARGS(&srvHeap));
@@ -177,6 +183,7 @@ int main(void)
         return 1;
     }
 
+    UINT cbvSrvDescriptorSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     UINT rtvDescriptorSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
 
     // create frame resources
@@ -203,11 +210,12 @@ int main(void)
         return 1;
     }
 
-    ID3D12CommandAllocator* bundleAllocator = nullptr;    
+    ID3D12CommandAllocator *bundleAllocator = nullptr;
     hr = device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_BUNDLE, IID_PPV_ARGS(&bundleAllocator));
-    if (FAILED(hr)) {
+    if (FAILED(hr))
+    {
         errhr("CreateCommandAllocator failed", hr);
-        return 1;    
+        return 1;
     }
 
     // load assets
@@ -219,10 +227,12 @@ int main(void)
         featureData.HighestVersion = D3D_ROOT_SIGNATURE_VERSION_1_0;
     }
 
-    CD3DX12_DESCRIPTOR_RANGE1 ranges[1];
-    ranges[0].Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0, 0, D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC);
-    CD3DX12_ROOT_PARAMETER1 rootParameters[1];
-    rootParameters[0].InitAsDescriptorTable(1, &ranges[0], D3D12_SHADER_VISIBILITY_PIXEL);
+    CD3DX12_DESCRIPTOR_RANGE1 ranges[2];
+    ranges[0].Init(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, 1, 0);
+    ranges[1].Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0, 0, D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC);
+    CD3DX12_ROOT_PARAMETER1 rootParameters[2];
+    rootParameters[0].InitAsDescriptorTable(1, &ranges[0], D3D12_SHADER_VISIBILITY_VERTEX); // crv
+    rootParameters[1].InitAsDescriptorTable(1, &ranges[1], D3D12_SHADER_VISIBILITY_PIXEL);  // srv
 
     D3D12_STATIC_SAMPLER_DESC sampler = {};
     sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_POINT;
@@ -239,8 +249,11 @@ int main(void)
     sampler.RegisterSpace = 0;
     sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
+    D3D12_ROOT_SIGNATURE_FLAGS rootSignatureFlags =
+        D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
+
     CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC rootSignatureDesc;
-    rootSignatureDesc.Init_1_1(_countof(rootParameters), rootParameters, 1, &sampler, D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
+    rootSignatureDesc.Init_1_1(_countof(rootParameters), rootParameters, 1, &sampler, rootSignatureFlags);
     ID3DBlob *signature;
     ID3DBlob *error;
     hr = D3DX12SerializeVersionedRootSignature(&rootSignatureDesc, featureData.HighestVersion, &signature, &error);
@@ -340,6 +353,33 @@ int main(void)
 
     const UINT vertexBufferSize = sizeof(triangleVertices);
 
+    // create constant buffer
+    ID3D12Resource *constantBuffer = nullptr;
+    const UINT constantBufferSize = 256U;
+    static UINT *CbvDataBegin = nullptr;
+
+    hr = device->CreateCommittedResource(
+        &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD),
+        D3D12_HEAP_FLAG_NONE,
+        &CD3DX12_RESOURCE_DESC::Buffer(constantBufferSize),
+        D3D12_RESOURCE_STATE_GENERIC_READ,
+        nullptr,
+        IID_PPV_ARGS(&constantBuffer));
+    if (FAILED(hr))
+    {
+        errhr("CreateCommittedResource failed", hr);
+        return 1;
+    }
+
+    D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDesc = {};
+    cbvDesc.BufferLocation = constantBuffer->GetGPUVirtualAddress();
+    cbvDesc.SizeInBytes = constantBufferSize;
+    device->CreateConstantBufferView(&cbvDesc, srvHeap->GetCPUDescriptorHandleForHeapStart());
+
+    CD3DX12_RANGE readRangeCBV(0, 0);
+    constantBuffer->Map(0, &readRangeCBV, reinterpret_cast<void **>(&CbvDataBegin));
+    memcpy(CbvDataBegin, &constantBufferData, sizeof(constantBufferData));
+
     // FROM MICROSOFT:
     // Note: using upload heaps to transfer static data like vert buffers is not
     // recommended. Every time the GPU needs it, the upload heap will be marshalled
@@ -364,9 +404,10 @@ int main(void)
     vertexBufferView.SizeInBytes = vertexBufferSize;
 
     // CREATE BUNDLE
-    ID3D12GraphicsCommandList* bundle = nullptr;
+    ID3D12GraphicsCommandList *bundle = nullptr;
     hr = device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_BUNDLE, bundleAllocator, pipelineState, IID_PPV_ARGS(&bundle));
-    if (FAILED(hr)) {
+    if (FAILED(hr))
+    {
         errhr("CreateCommandList failed", hr);
         return 1;
     }
@@ -445,7 +486,9 @@ int main(void)
     srvDesc.Format = textureDesc.Format;
     srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
     srvDesc.Texture2D.MipLevels = 1;
-    device->CreateShaderResourceView(texture, &srvDesc, srvHeap->GetCPUDescriptorHandleForHeapStart());
+    D3D12_CPU_DESCRIPTOR_HANDLE srvHandleCPU = srvHeap->GetCPUDescriptorHandleForHeapStart();
+    srvHandleCPU.ptr += cbvSrvDescriptorSize;
+    device->CreateShaderResourceView(texture, &srvDesc, srvHandleCPU);
 
     commandList->Close();
     ID3D12CommandList *commandListsSetup[] = {commandList};
@@ -502,6 +545,16 @@ int main(void)
 
         // main loop main body
         // update here
+        const float translationSpeed = 0.005f;
+        const float offsetBounds = 1.25f;
+
+        constantBufferData.offset.x += translationSpeed;
+        if (constantBufferData.offset.x > offsetBounds)
+        {
+            constantBufferData.offset.x = -offsetBounds;
+        }
+
+        memcpy(CbvDataBegin, &constantBufferData, sizeof(constantBufferData));
 
         // render here
         // populate command list
@@ -513,7 +566,11 @@ int main(void)
         ID3D12DescriptorHeap *heaps[] = {srvHeap};
         commandList->SetDescriptorHeaps(_countof(heaps), heaps);
 
-        commandList->SetGraphicsRootDescriptorTable(0, srvHeap->GetGPUDescriptorHandleForHeapStart());
+        commandList->SetGraphicsRootDescriptorTable(0, srvHeap->GetGPUDescriptorHandleForHeapStart()); //CBV
+
+        D3D12_GPU_DESCRIPTOR_HANDLE srvHandleGPU = srvHeap->GetGPUDescriptorHandleForHeapStart();
+        srvHandleGPU.ptr += cbvSrvDescriptorSize;
+        commandList->SetGraphicsRootDescriptorTable(1, srvHandleGPU);
         commandList->RSSetViewports(1, &viewport);
         commandList->RSSetScissorRects(1, &scissorRect);
 
