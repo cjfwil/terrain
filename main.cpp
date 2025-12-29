@@ -29,8 +29,6 @@ static struct
 
 int main(void)
 {
-    int width = 1920;
-    int height = 1080;
 
     if (!SetExtendedMetadata())
         return 1;
@@ -40,6 +38,9 @@ int main(void)
         err("SDL_Init failed");
         return 1;
     }
+
+    int width = 1920;
+    int height = 1080;
 
     programState.window = SDL_CreateWindow(APP_WINDOW_TITLE, (int)width, (int)height, SDL_WINDOW_FULLSCREEN);
     if (!programState.window)
@@ -170,7 +171,8 @@ int main(void)
     srvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     srvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
     hr = device->CreateDescriptorHeap(&srvHeapDesc, IID_PPV_ARGS(&srvHeap));
-    if (FAILED(hr)) {
+    if (FAILED(hr))
+    {
         errhr("CreateDescriptorHeap failed (srvHeap)", hr);
         return 1;
     }
@@ -199,6 +201,13 @@ int main(void)
     {
         errhr("CreateCommandAllocator failed", hr);
         return 1;
+    }
+
+    ID3D12CommandAllocator* bundleAllocator = nullptr;    
+    hr = device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_BUNDLE, IID_PPV_ARGS(&bundleAllocator));
+    if (FAILED(hr)) {
+        errhr("CreateCommandAllocator failed", hr);
+        return 1;    
     }
 
     // load assets
@@ -354,14 +363,27 @@ int main(void)
     vertexBufferView.StrideInBytes = sizeof(vertex);
     vertexBufferView.SizeInBytes = vertexBufferSize;
 
+    // CREATE BUNDLE
+    ID3D12GraphicsCommandList* bundle = nullptr;
+    hr = device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_BUNDLE, bundleAllocator, pipelineState, IID_PPV_ARGS(&bundle));
+    if (FAILED(hr)) {
+        errhr("CreateCommandList failed", hr);
+        return 1;
+    }
+    bundle->SetGraphicsRootSignature(rootSignature);
+    bundle->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    bundle->IASetVertexBuffers(0, 1, &vertexBufferView);
+    bundle->DrawInstanced(3, 1, 0, 0);
+    bundle->Close();
+
     const int texWidth = 16;
     const int texHeight = 16;
-    unsigned int textureData[texWidth * texHeight] = {};    
+    unsigned int textureData[texWidth * texHeight] = {};
     for (int i = 0; i < texWidth * texHeight; ++i)
     {
         int x = i % texWidth;
         int y = i / texHeight;
-        if ((x+y) % 2 == 0)
+        if ((x + y) % 2 == 0)
             textureData[i] = 0xfffff000;
         else
             textureData[i] = 0xff000fff;
@@ -417,7 +439,7 @@ int main(void)
     commandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(texture, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE));
 
     // SRV for texture
-    
+
     D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
     srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
     srvDesc.Format = textureDesc.Format;
@@ -503,9 +525,14 @@ int main(void)
         // commands
         const float clearColour[4] = {0.0f, 0.2f, 0.4f, 1.0f};
         commandList->ClearRenderTargetView(rtvHandlePerFrame, clearColour, 0, nullptr);
-        commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        commandList->IASetVertexBuffers(0, 1, &vertexBufferView);
-        commandList->DrawInstanced(3, 1, 0, 0);
+
+        // non bundle rendering
+        // commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        // commandList->IASetVertexBuffers(0, 1, &vertexBufferView);
+        // commandList->DrawInstanced(3, 1, 0, 0);
+
+        // bundle rendering
+        commandList->ExecuteBundle(bundle);
 
         commandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(renderTargets[frameIndex], D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT));
         hr = commandList->Close();
