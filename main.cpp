@@ -33,6 +33,11 @@ static struct
     float padding[60]; // Padding so the constant buffer is 256-byte aligned.
 } constantBufferData;
 
+static struct
+{
+    // todo drop d3d12 state stuff in here
+} d3d12State;
+
 int main(void)
 {
 
@@ -359,10 +364,12 @@ int main(void)
     const UINT constantBufferSize = 256U;
     static UINT *CbvDataBegin = nullptr;
 
+    CD3DX12_HEAP_PROPERTIES heapPropsUpload(D3D12_HEAP_TYPE_UPLOAD);
+    CD3DX12_RESOURCE_DESC constantBufferDesc = CD3DX12_RESOURCE_DESC::Buffer(constantBufferSize);
     hr = device->CreateCommittedResource(
-        &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD),
+        &heapPropsUpload,
         D3D12_HEAP_FLAG_NONE,
-        &CD3DX12_RESOURCE_DESC::Buffer(constantBufferSize),
+        &constantBufferDesc,
         D3D12_RESOURCE_STATE_GENERIC_READ,
         nullptr,
         IID_PPV_ARGS(&constantBuffer));
@@ -387,7 +394,13 @@ int main(void)
     // over. Please read up on Default Heap usage. An upload heap is used here for
     // code simplicity and because there are very few verts to actually transfer.
     ID3D12Resource *vertexBuffer = nullptr;
-    hr = device->CreateCommittedResource(&CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD), D3D12_HEAP_FLAG_NONE, &CD3DX12_RESOURCE_DESC::Buffer(vertexBufferSize), D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&vertexBuffer));
+    CD3DX12_RESOURCE_DESC vertexBufferDesc = CD3DX12_RESOURCE_DESC::Buffer(vertexBufferSize);
+    hr = device->CreateCommittedResource(
+        &heapPropsUpload,
+        D3D12_HEAP_FLAG_NONE,
+        &vertexBufferDesc,
+        D3D12_RESOURCE_STATE_GENERIC_READ,
+        nullptr, IID_PPV_ARGS(&vertexBuffer));
     UINT *vertexDataBegin = nullptr;
     CD3DX12_RANGE readRange(0, 0);
     hr = vertexBuffer->Map(0, &readRange, (void **)&vertexDataBegin);
@@ -443,9 +456,10 @@ int main(void)
     textureDesc.SampleDesc.Quality = 0;
     textureDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
 
+    CD3DX12_HEAP_PROPERTIES heapPropsDefault(D3D12_HEAP_TYPE_DEFAULT);
     ID3D12Resource *texture = nullptr;
     hr = device->CreateCommittedResource(
-        &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT),
+        &heapPropsDefault,
         D3D12_HEAP_FLAG_NONE,
         &textureDesc,
         D3D12_RESOURCE_STATE_COPY_DEST,
@@ -459,10 +473,11 @@ int main(void)
     const UINT64 uploadBufferSize = GetRequiredIntermediateSize(texture, 0, 1);
 
     // gpu upload buffer
+    CD3DX12_RESOURCE_DESC uploadBufferDesc = CD3DX12_RESOURCE_DESC::Buffer(uploadBufferSize);
     hr = device->CreateCommittedResource(
-        &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD),
+        &heapPropsUpload,
         D3D12_HEAP_FLAG_NONE,
-        &CD3DX12_RESOURCE_DESC::Buffer(uploadBufferSize),
+        &uploadBufferDesc,
         D3D12_RESOURCE_STATE_GENERIC_READ,
         nullptr,
         IID_PPV_ARGS(&textureUploadHeap));
@@ -478,7 +493,8 @@ int main(void)
     textureDataDesc.SlicePitch = textureDataDesc.RowPitch * texHeight;
 
     UpdateSubresources(commandList, texture, textureUploadHeap, 0, 0, 1, &textureDataDesc);
-    commandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(texture, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE));
+    CD3DX12_RESOURCE_BARRIER commandListResourceBarrierTransitionPixelShader = CD3DX12_RESOURCE_BARRIER::Transition(texture, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    commandList->ResourceBarrier(1, &commandListResourceBarrierTransitionPixelShader);
 
     // SRV for texture
 
@@ -585,9 +601,10 @@ int main(void)
         commandList->RSSetViewports(1, &viewport);
         commandList->RSSetScissorRects(1, &scissorRect);
 
-        commandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(renderTargets[frameIndex], D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET));
+        CD3DX12_RESOURCE_BARRIER commandListResourceBarrierTransitionRenderTarget = CD3DX12_RESOURCE_BARRIER::Transition(renderTargets[frameIndex], D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
+        commandList->ResourceBarrier(1, &commandListResourceBarrierTransitionRenderTarget);
 
-        CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandlePerFrame(rtvHeap->GetCPUDescriptorHandleForHeapStart(), frameIndex, rtvDescriptorSize);
+        CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandlePerFrame(rtvHeap->GetCPUDescriptorHandleForHeapStart(), (INT)frameIndex, rtvDescriptorSize);
         commandList->OMSetRenderTargets(1, &rtvHandlePerFrame, FALSE, nullptr);
 
         // commands
@@ -601,8 +618,8 @@ int main(void)
 
         // bundle rendering
         commandList->ExecuteBundle(bundle);
-
-        commandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(renderTargets[frameIndex], D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT));
+        // CD3DX12_RESOURCE_BARRIER commandListResourceBarrierTransitionPixelShader = CD3DX12_RESOURCE_BARRIER::Transition(renderTargets[frameIndex], D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
+        commandList->ResourceBarrier(1, &commandListResourceBarrierTransitionRenderTarget);
         hr = commandList->Close();
         if (FAILED(hr))
         {
@@ -656,11 +673,6 @@ int main(void)
             return 1;
         }
         frameIndex = swapChain->GetCurrentBackBufferIndex();
-        // After frameIndex = swapChain->GetCurrentBackBufferIndex();
-        SDL_Log("Frame %lld: using frameIndex=%u, fenceValues[0]=%llu, fenceValues[1]=%llu, completed=%llu\n",
-               programState.ticksElapsed, frameIndex,
-               fenceValues[0], fenceValues[1],
-               fence->GetCompletedValue());
 
         if (fence->GetCompletedValue() < fenceValues[frameIndex])
         {
