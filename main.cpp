@@ -115,7 +115,7 @@ int main(void)
         return 1;
     }
 
-    static const int bufferCount = 3; // triple buffering
+    static const int frameCount = 2;
     DXGI_SWAP_CHAIN_DESC1 swapChainDesc = {};
     swapChainDesc.Width = (UINT)width;
     swapChainDesc.Height = (UINT)height;
@@ -124,7 +124,7 @@ int main(void)
     swapChainDesc.SampleDesc.Count = 1;
     swapChainDesc.SampleDesc.Quality = 0;
     swapChainDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-    swapChainDesc.BufferCount = (UINT)bufferCount;
+    swapChainDesc.BufferCount = (UINT)frameCount;
     swapChainDesc.Scaling = DXGI_SCALING_NONE;
     swapChainDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
     swapChainDesc.AlphaMode = DXGI_ALPHA_MODE_UNSPECIFIED;
@@ -160,7 +160,7 @@ int main(void)
     // create descriptor heaps
     D3D12_DESCRIPTOR_HEAP_DESC rtvHeapDesc = {};
     rtvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
-    rtvHeapDesc.NumDescriptors = (UINT)bufferCount;
+    rtvHeapDesc.NumDescriptors = (UINT)frameCount;
     rtvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
     rtvHeapDesc.NodeMask = 0;
     ID3D12DescriptorHeap *rtvHeap = nullptr;
@@ -188,10 +188,11 @@ int main(void)
 
     // create frame resources
     CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandleSetup(rtvHeap->GetCPUDescriptorHandleForHeapStart());
+    ID3D12CommandAllocator *commandAllocators[frameCount] = {};
 
-    ID3D12Resource *renderTargets[bufferCount] = {};
+    ID3D12Resource *renderTargets[frameCount] = {};
     // rtv for each buffer (double or triple buffering)
-    for (UINT n = 0; n < bufferCount; n++)
+    for (UINT n = 0; n < frameCount; n++)
     {
         hr = swapChain->GetBuffer(n, IID_PPV_ARGS(&renderTargets[n]));
         if (FAILED(hr))
@@ -201,13 +202,13 @@ int main(void)
         }
         device->CreateRenderTargetView(renderTargets[n], nullptr, rtvHandleSetup);
         rtvHandleSetup.Offset(1, rtvDescriptorSize);
-    }
-    ID3D12CommandAllocator *commandAllocator = nullptr;
-    hr = device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&commandAllocator));
-    if (FAILED(hr))
-    {
-        errhr("CreateCommandAllocator failed", hr);
-        return 1;
+
+        hr = device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&commandAllocators[n]));
+        if (FAILED(hr))
+        {
+            errhr("CreateCommandAllocator failed", hr);
+            return 1;
+        }
     }
 
     ID3D12CommandAllocator *bundleAllocator = nullptr;
@@ -321,7 +322,7 @@ int main(void)
     }
 
     ID3D12GraphicsCommandList *commandList = nullptr;
-    hr = device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, commandAllocator, nullptr, IID_PPV_ARGS(&commandList));
+    hr = device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, commandAllocators[frameIndex], nullptr, IID_PPV_ARGS(&commandList));
     if (FAILED(hr))
     {
         errhr("CreateCommandList failed", hr);
@@ -496,9 +497,9 @@ int main(void)
 
     // create synchronisation objects
     ID3D12Fence *fence = nullptr;
-    UINT64 fenceValue = 0;
-    hr = device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence));
-    fenceValue = 1;
+    UINT64 fenceValues[frameCount] = {};
+    hr = device->CreateFence(fenceValues[frameIndex], D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence));
+    fenceValues[frameIndex]++;
     if (FAILED(hr))
     {
         errhr("CreateFence failed", hr);
@@ -558,15 +559,25 @@ int main(void)
 
         // render here
         // populate command list
-        commandAllocator->Reset();
-        commandList->Reset(commandAllocator, pipelineState);
+        hr = commandAllocators[frameIndex]->Reset();
+        if (FAILED(hr))
+        {
+            errhr("Reset failed (command allocators)", hr);
+            return 1;
+        }
+        hr = commandList->Reset(commandAllocators[frameIndex], pipelineState);
+        if (FAILED(hr))
+        {
+            errhr("Reset failed (command list)", hr);
+            return 1;
+        }
 
         commandList->SetGraphicsRootSignature(rootSignature);
 
         ID3D12DescriptorHeap *heaps[] = {srvHeap};
         commandList->SetDescriptorHeaps(_countof(heaps), heaps);
 
-        commandList->SetGraphicsRootDescriptorTable(0, srvHeap->GetGPUDescriptorHandleForHeapStart()); //CBV
+        commandList->SetGraphicsRootDescriptorTable(0, srvHeap->GetGPUDescriptorHandleForHeapStart()); // CBV
 
         D3D12_GPU_DESCRIPTOR_HANDLE srvHandleGPU = srvHeap->GetGPUDescriptorHandleForHeapStart();
         srvHandleGPU.ptr += cbvSrvDescriptorSize;
@@ -613,33 +624,111 @@ int main(void)
 
         // wait for prev frame (d3d11 style)
         //  TODO: switch to more d3d12 style frame buffering (no waiting)
-        const UINT64 localFenceValue = fenceValue; // DO NOT ACCIDENTLY CHANGE THE FENCE VALUE HERE, it needs to be the same thats why we are creating a const copy
-        hr = commandQueue->Signal(fence, localFenceValue);
+        // const UINT64 localFenceValue = fenceValue; // DO NOT ACCIDENTLY CHANGE THE FENCE VALUE HERE, it needs to be the same thats why we are creating a const copy
+        // hr = commandQueue->Signal(fence, localFenceValue);
+        // if (FAILED(hr))
+        // {
+        //     errhr("Signal failed (command queue)", hr);
+        //     return 1;
+        // }
+        // fenceValue++; // now we chan change it this is deliberate
+
+        // if (fence->GetCompletedValue() < localFenceValue)
+        // {
+        //     hr = fence->SetEventOnCompletion(localFenceValue, fenceEvent);
+        //     if (FAILED(hr))
+        //     {
+        //         errhr("SetEventOnCompletion failed", hr);
+        //         return 1;
+        //     }
+        //     WaitForSingleObject(fenceEvent, INFINITE);
+        // }
+
+        // frameIndex = swapChain->GetCurrentBackBufferIndex();
+        // end of waiting
+
+        // move to next frame
+        const UINT64 currentFenceValue = fenceValues[frameIndex];
+        hr = commandQueue->Signal(fence, currentFenceValue);
         if (FAILED(hr))
         {
-            errhr("Signal failed (command queue)", hr);
+            errhr("Signal failed", hr);
             return 1;
         }
-        fenceValue++; // now we chan change it this is deliberate
+        frameIndex = swapChain->GetCurrentBackBufferIndex();
+        // After frameIndex = swapChain->GetCurrentBackBufferIndex();
+        SDL_Log("Frame %lld: using frameIndex=%u, fenceValues[0]=%llu, fenceValues[1]=%llu, completed=%llu\n",
+               programState.ticksElapsed, frameIndex,
+               fenceValues[0], fenceValues[1],
+               fence->GetCompletedValue());
 
-        // waiting (d3d11 style)
-        if (fence->GetCompletedValue() < localFenceValue)
+        if (fence->GetCompletedValue() < fenceValues[frameIndex])
         {
-            hr = fence->SetEventOnCompletion(localFenceValue, fenceEvent);
+            hr = fence->SetEventOnCompletion(fenceValues[frameIndex], fenceEvent);
             if (FAILED(hr))
             {
                 errhr("SetEventOnCompletion failed", hr);
                 return 1;
             }
-            WaitForSingleObject(fenceEvent, INFINITE);
+            WaitForSingleObjectEx(fenceEvent, INFINITE, FALSE);
         }
-
-        frameIndex = swapChain->GetCurrentBackBufferIndex();
-        // end of waiting
+        fenceValues[frameIndex] = currentFenceValue + 1;
+        // end of moving to next frame
 
         programState.ticksElapsed++;
     }
     SDL_DestroyWindow(programState.window);
     SDL_Quit();
+
+    // cleanup
+    if (fenceEvent)
+        CloseHandle(fenceEvent);
+    if (fence)
+        fence->Release();
+    if (texture)
+        texture->Release();
+    if (textureUploadHeap)
+        textureUploadHeap->Release();
+    if (vertexBuffer)
+        vertexBuffer->Release();
+    if (constantBuffer)
+        constantBuffer->Release();
+    if (bundle)
+        bundle->Release();
+    if (commandList)
+        commandList->Release();
+    if (pipelineState)
+        pipelineState->Release();
+    if (rootSignature)
+        rootSignature->Release();
+    if (srvHeap)
+        srvHeap->Release();
+    if (rtvHeap)
+        rtvHeap->Release();
+    for (UINT i = 0; i < frameCount; ++i)
+    {
+        if (renderTargets[i])
+            renderTargets[i]->Release();
+        if (commandAllocators[i])
+            commandAllocators[i]->Release();
+    }
+    if (swapChain)
+        swapChain->Release();
+    if (commandQueue)
+        commandQueue->Release();
+    if (bundleAllocator)
+        bundleAllocator->Release();
+    if (device)
+        device->Release();
+    if (hardwareAdapter)
+        hardwareAdapter->Release();
+    if (factory)
+        factory->Release();
+    if (vertexShader)
+        vertexShader->Release();
+    if (pixelShader)
+        pixelShader->Release();
+    if (signature)
+        signature->Release();
     return (0);
 }
