@@ -47,6 +47,18 @@ static struct
     ID3D12DescriptorHeap *srvHeap = nullptr;
     static const int frameCount = 2;
     ID3D12CommandAllocator *commandAllocators[frameCount] = {};
+    ID3D12Resource *renderTargets[frameCount] = {};
+    ID3D12CommandAllocator *bundleAllocator = nullptr;
+    ID3D12RootSignature *rootSignature = nullptr;
+    ID3D12Fence *fence = nullptr;
+    ID3D12PipelineState *pipelineState = nullptr;
+    ID3D12GraphicsCommandList *commandList = nullptr;
+    ID3DBlob *vertexShader = nullptr;
+    ID3DBlob *pixelShader = nullptr;
+    ID3D12Resource *texture = nullptr;
+    ID3D12Resource *constantBuffer = nullptr;
+    ID3D12Resource *vertexBuffer = nullptr;
+    ID3D12GraphicsCommandList *bundle = nullptr;
     // end of init
 } renderState;
 
@@ -125,7 +137,6 @@ int main(void)
         errhr("CreateCommandQueue failed", hr);
         return 1;
     }
-
     
     DXGI_SWAP_CHAIN_DESC1 swapChainDesc = {};
     swapChainDesc.Width = (UINT)width;
@@ -196,19 +207,17 @@ int main(void)
 
     // create frame resources
     CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandleSetup(renderState.rtvHeap->GetCPUDescriptorHandleForHeapStart());
-    
-
-    ID3D12Resource *renderTargets[renderState.frameCount] = {};
+        
     // rtv for each buffer (double or triple buffering)
     for (UINT n = 0; n < renderState.frameCount; n++)
     {
-        hr = renderState.swapChain->GetBuffer(n, IID_PPV_ARGS(&renderTargets[n]));
+        hr = renderState.swapChain->GetBuffer(n, IID_PPV_ARGS(&renderState.renderTargets[n]));
         if (FAILED(hr))
         {
             errhr("GetBuffer failed", hr);
             return 1;
         }
-        renderState.device->CreateRenderTargetView(renderTargets[n], nullptr, rtvHandleSetup);
+        renderState.device->CreateRenderTargetView(renderState.renderTargets[n], nullptr, rtvHandleSetup);
         rtvHandleSetup.Offset(1, rtvDescriptorSize);
 
         hr = renderState.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&renderState.commandAllocators[n]));
@@ -218,9 +227,8 @@ int main(void)
             return 1;
         }
     }
-
-    ID3D12CommandAllocator *bundleAllocator = nullptr;
-    hr = renderState.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_BUNDLE, IID_PPV_ARGS(&bundleAllocator));
+    
+    hr = renderState.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_BUNDLE, IID_PPV_ARGS(&renderState.bundleAllocator));
     if (FAILED(hr))
     {
         errhr("CreateCommandAllocator failed", hr);
@@ -271,17 +279,15 @@ int main(void)
         errhr("D3D12SerializeRootSignature failed", hr);
         return 1;
     }
-    ID3D12RootSignature *rootSignature = nullptr;
-    hr = renderState.device->CreateRootSignature(0, signature->GetBufferPointer(), signature->GetBufferSize(), IID_PPV_ARGS(&rootSignature));
+    
+    hr = renderState.device->CreateRootSignature(0, signature->GetBufferPointer(), signature->GetBufferSize(), IID_PPV_ARGS(&renderState.rootSignature));
     if (FAILED(hr))
     {
         errhr("CreateRootSignature failed", hr);
         return 1;
     }
 
-    // create pipeline state (including shaders)
-    ID3DBlob *vertexShader = nullptr;
-    ID3DBlob *pixelShader = nullptr;
+    // create pipeline state (including shaders)    
 #if defined(_DEBUG)
     // Enable better shader debugging with the graphics debugging tools.
     UINT compileFlags = D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
@@ -289,13 +295,13 @@ int main(void)
     UINT compileFlags = 0;
 #endif
 
-    hr = D3DCompileFromFile(L"shaders.hlsl", nullptr, nullptr, "VSMain", "vs_5_0", compileFlags, 0, &vertexShader, nullptr);
+    hr = D3DCompileFromFile(L"shaders.hlsl", nullptr, nullptr, "VSMain", "vs_5_0", compileFlags, 0, &renderState.vertexShader, nullptr);
     if (FAILED(hr))
     {
         errhr("D3DCompile from file failed (vertex shader)", hr);
         return 1;
     }
-    hr = D3DCompileFromFile(L"shaders.hlsl", nullptr, nullptr, "PSMain", "ps_5_0", compileFlags, 0, &pixelShader, nullptr);
+    hr = D3DCompileFromFile(L"shaders.hlsl", nullptr, nullptr, "PSMain", "ps_5_0", compileFlags, 0, &renderState.pixelShader, nullptr);
     if (FAILED(hr))
     {
         errhr("D3DCompile from file failed (pixel shader)", hr);
@@ -309,9 +315,9 @@ int main(void)
 
     D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
     psoDesc.InputLayout = {inputElementDesc, _countof(inputElementDesc)};
-    psoDesc.pRootSignature = rootSignature;
-    psoDesc.VS = CD3DX12_SHADER_BYTECODE(vertexShader);
-    psoDesc.PS = CD3DX12_SHADER_BYTECODE(pixelShader);
+    psoDesc.pRootSignature = renderState.rootSignature;
+    psoDesc.VS = CD3DX12_SHADER_BYTECODE(renderState.vertexShader);
+    psoDesc.PS = CD3DX12_SHADER_BYTECODE(renderState.pixelShader);
     psoDesc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
     psoDesc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
     psoDesc.DepthStencilState.DepthEnable = FALSE;
@@ -321,16 +327,15 @@ int main(void)
     psoDesc.NumRenderTargets = 1;
     psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
     psoDesc.SampleDesc.Count = 1;
-    ID3D12PipelineState *pipelineState = nullptr;
-    hr = renderState.device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&pipelineState));
+    
+    hr = renderState.device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&renderState.pipelineState));
     if (FAILED(hr))
     {
         errhr("CreateGraphicsPipelineState failed", hr);
         return 1;
     }
-
-    ID3D12GraphicsCommandList *commandList = nullptr;
-    hr = renderState.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, renderState.commandAllocators[frameIndex], nullptr, IID_PPV_ARGS(&commandList));
+    
+    hr = renderState.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, renderState.commandAllocators[frameIndex], nullptr, IID_PPV_ARGS(&renderState.commandList));
     if (FAILED(hr))
     {
         errhr("CreateCommandList failed", hr);
@@ -362,8 +367,7 @@ int main(void)
 
     const UINT vertexBufferSize = sizeof(triangleVertices);
 
-    // create constant buffer
-    ID3D12Resource *constantBuffer = nullptr;
+    // create constant buffer    
     const UINT constantBufferSize = 256U;
     static UINT *CbvDataBegin = nullptr;
 
@@ -375,7 +379,7 @@ int main(void)
         &constantBufferDesc,
         D3D12_RESOURCE_STATE_GENERIC_READ,
         nullptr,
-        IID_PPV_ARGS(&constantBuffer));
+        IID_PPV_ARGS(&renderState.constantBuffer));
     if (FAILED(hr))
     {
         errhr("CreateCommittedResource failed", hr);
@@ -383,56 +387,54 @@ int main(void)
     }
 
     D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDesc = {};
-    cbvDesc.BufferLocation = constantBuffer->GetGPUVirtualAddress();
+    cbvDesc.BufferLocation = renderState.constantBuffer->GetGPUVirtualAddress();
     cbvDesc.SizeInBytes = constantBufferSize;
     renderState.device->CreateConstantBufferView(&cbvDesc, renderState.srvHeap->GetCPUDescriptorHandleForHeapStart());
 
     CD3DX12_RANGE readRangeCBV(0, 0);
-    constantBuffer->Map(0, &readRangeCBV, reinterpret_cast<void **>(&CbvDataBegin));
+    renderState.constantBuffer->Map(0, &readRangeCBV, reinterpret_cast<void **>(&CbvDataBegin));
     memcpy(CbvDataBegin, &constantBufferData, sizeof(constantBufferData));
 
     // FROM MICROSOFT:
     // Note: using upload heaps to transfer static data like vert buffers is not
     // recommended. Every time the GPU needs it, the upload heap will be marshalled
     // over. Please read up on Default Heap usage. An upload heap is used here for
-    // code simplicity and because there are very few verts to actually transfer.
-    ID3D12Resource *vertexBuffer = nullptr;
+    // code simplicity and because there are very few verts to actually transfer.    
     CD3DX12_RESOURCE_DESC vertexBufferDesc = CD3DX12_RESOURCE_DESC::Buffer(vertexBufferSize);
     hr = renderState.device->CreateCommittedResource(
         &heapPropsUpload,
         D3D12_HEAP_FLAG_NONE,
         &vertexBufferDesc,
         D3D12_RESOURCE_STATE_GENERIC_READ,
-        nullptr, IID_PPV_ARGS(&vertexBuffer));
+        nullptr, IID_PPV_ARGS(&renderState.vertexBuffer));
     UINT *vertexDataBegin = nullptr;
     CD3DX12_RANGE readRange(0, 0);
-    hr = vertexBuffer->Map(0, &readRange, (void **)&vertexDataBegin);
+    hr = renderState.vertexBuffer->Map(0, &readRange, (void **)&vertexDataBegin);
     if (FAILED(hr))
     {
         errhr("Map failed (vertex buffer)", hr);
         return 1;
     }
     memcpy(vertexDataBegin, triangleVertices, sizeof(triangleVertices));
-    vertexBuffer->Unmap(0, nullptr);
+    renderState.vertexBuffer->Unmap(0, nullptr);
 
     D3D12_VERTEX_BUFFER_VIEW vertexBufferView = {};
-    vertexBufferView.BufferLocation = vertexBuffer->GetGPUVirtualAddress();
+    vertexBufferView.BufferLocation = renderState.vertexBuffer->GetGPUVirtualAddress();
     vertexBufferView.StrideInBytes = sizeof(vertex);
     vertexBufferView.SizeInBytes = vertexBufferSize;
 
-    // CREATE BUNDLE
-    ID3D12GraphicsCommandList *bundle = nullptr;
-    hr = renderState.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_BUNDLE, bundleAllocator, pipelineState, IID_PPV_ARGS(&bundle));
+    // CREATE BUNDLE    
+    hr = renderState.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_BUNDLE, renderState.bundleAllocator, renderState.pipelineState, IID_PPV_ARGS(&renderState.bundle));
     if (FAILED(hr))
     {
         errhr("CreateCommandList failed", hr);
         return 1;
     }
-    bundle->SetGraphicsRootSignature(rootSignature);
-    bundle->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    bundle->IASetVertexBuffers(0, 1, &vertexBufferView);
-    bundle->DrawInstanced(3, 1, 0, 0);
-    bundle->Close();
+    renderState.bundle->SetGraphicsRootSignature(renderState.rootSignature);
+    renderState.bundle->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    renderState.bundle->IASetVertexBuffers(0, 1, &vertexBufferView);
+    renderState.bundle->DrawInstanced(3, 1, 0, 0);
+    renderState.bundle->Close();
 
     const int texWidth = 16;
     const int texHeight = 16;
@@ -459,21 +461,20 @@ int main(void)
     textureDesc.SampleDesc.Quality = 0;
     textureDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
 
-    CD3DX12_HEAP_PROPERTIES heapPropsDefault(D3D12_HEAP_TYPE_DEFAULT);
-    ID3D12Resource *texture = nullptr;
+    CD3DX12_HEAP_PROPERTIES heapPropsDefault(D3D12_HEAP_TYPE_DEFAULT);    
     hr = renderState.device->CreateCommittedResource(
         &heapPropsDefault,
         D3D12_HEAP_FLAG_NONE,
         &textureDesc,
         D3D12_RESOURCE_STATE_COPY_DEST,
         nullptr,
-        IID_PPV_ARGS(&texture));
+        IID_PPV_ARGS(&renderState.texture));
     if (FAILED(hr))
     {
         errhr("CreateCommittedResource (texture)", hr);
         return 1;
     }
-    const UINT64 uploadBufferSize = GetRequiredIntermediateSize(texture, 0, 1);
+    const UINT64 uploadBufferSize = GetRequiredIntermediateSize(renderState.texture, 0, 1);
 
     // gpu upload buffer
     CD3DX12_RESOURCE_DESC uploadBufferDesc = CD3DX12_RESOURCE_DESC::Buffer(uploadBufferSize);
@@ -495,9 +496,9 @@ int main(void)
     textureDataDesc.RowPitch = texWidth * sizeof(textureData[0]);
     textureDataDesc.SlicePitch = textureDataDesc.RowPitch * texHeight;
 
-    UpdateSubresources(commandList, texture, textureUploadHeap, 0, 0, 1, &textureDataDesc);
-    CD3DX12_RESOURCE_BARRIER commandListResourceBarrierTransitionPixelShader = CD3DX12_RESOURCE_BARRIER::Transition(texture, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-    commandList->ResourceBarrier(1, &commandListResourceBarrierTransitionPixelShader);
+    UpdateSubresources(renderState.commandList, renderState.texture, textureUploadHeap, 0, 0, 1, &textureDataDesc);
+    CD3DX12_RESOURCE_BARRIER commandListResourceBarrierTransitionPixelShader = CD3DX12_RESOURCE_BARRIER::Transition(renderState.texture, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    renderState.commandList->ResourceBarrier(1, &commandListResourceBarrierTransitionPixelShader);
 
     // SRV for texture
 
@@ -508,16 +509,16 @@ int main(void)
     srvDesc.Texture2D.MipLevels = 1;
     D3D12_CPU_DESCRIPTOR_HANDLE srvHandleCPU = renderState.srvHeap->GetCPUDescriptorHandleForHeapStart();
     srvHandleCPU.ptr += cbvSrvDescriptorSize;
-    renderState.device->CreateShaderResourceView(texture, &srvDesc, srvHandleCPU);
+    renderState.device->CreateShaderResourceView(renderState.texture, &srvDesc, srvHandleCPU);
 
-    commandList->Close();
-    ID3D12CommandList *commandListsSetup[] = {commandList};
+    renderState.commandList->Close();
+    ID3D12CommandList *commandListsSetup[] = {renderState.commandList};
     renderState.commandQueue->ExecuteCommandLists(_countof(commandListsSetup), commandListsSetup);
 
     // create synchronisation objects
-    ID3D12Fence *fence = nullptr;
+    
     UINT64 fenceValues[renderState.frameCount] = {};
-    hr = renderState.device->CreateFence(fenceValues[frameIndex], D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence));
+    hr = renderState.device->CreateFence(fenceValues[frameIndex], D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&renderState.fence));
     fenceValues[frameIndex]++;
     if (FAILED(hr))
     {
@@ -584,35 +585,35 @@ int main(void)
             errhr("Reset failed (command allocators)", hr);
             return 1;
         }
-        hr = commandList->Reset(renderState.commandAllocators[frameIndex], pipelineState);
+        hr = renderState.commandList->Reset(renderState.commandAllocators[frameIndex], renderState.pipelineState);
         if (FAILED(hr))
         {
             errhr("Reset failed (command list)", hr);
             return 1;
         }
 
-        commandList->SetGraphicsRootSignature(rootSignature);
+        renderState.commandList->SetGraphicsRootSignature(renderState.rootSignature);
 
         ID3D12DescriptorHeap *heaps[] = {renderState.srvHeap};
-        commandList->SetDescriptorHeaps(_countof(heaps), heaps);
+        renderState.commandList->SetDescriptorHeaps(_countof(heaps), heaps);
 
-        commandList->SetGraphicsRootDescriptorTable(0, renderState.srvHeap->GetGPUDescriptorHandleForHeapStart()); // CBV
+        renderState.commandList->SetGraphicsRootDescriptorTable(0, renderState.srvHeap->GetGPUDescriptorHandleForHeapStart()); // CBV
 
         D3D12_GPU_DESCRIPTOR_HANDLE srvHandleGPU = renderState.srvHeap->GetGPUDescriptorHandleForHeapStart();
         srvHandleGPU.ptr += cbvSrvDescriptorSize;
-        commandList->SetGraphicsRootDescriptorTable(1, srvHandleGPU);
-        commandList->RSSetViewports(1, &viewport);
-        commandList->RSSetScissorRects(1, &scissorRect);
+        renderState.commandList->SetGraphicsRootDescriptorTable(1, srvHandleGPU);
+        renderState.commandList->RSSetViewports(1, &viewport);
+        renderState.commandList->RSSetScissorRects(1, &scissorRect);
 
-        CD3DX12_RESOURCE_BARRIER commandListResourceBarrierTransitionRenderTarget = CD3DX12_RESOURCE_BARRIER::Transition(renderTargets[frameIndex], D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
-        commandList->ResourceBarrier(1, &commandListResourceBarrierTransitionRenderTarget);
+        CD3DX12_RESOURCE_BARRIER commandListResourceBarrierTransitionRenderTarget = CD3DX12_RESOURCE_BARRIER::Transition(renderState.renderTargets[frameIndex], D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
+        renderState.commandList->ResourceBarrier(1, &commandListResourceBarrierTransitionRenderTarget);
 
         CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandlePerFrame(renderState.rtvHeap->GetCPUDescriptorHandleForHeapStart(), (INT)frameIndex, rtvDescriptorSize);
-        commandList->OMSetRenderTargets(1, &rtvHandlePerFrame, FALSE, nullptr);
+        renderState.commandList->OMSetRenderTargets(1, &rtvHandlePerFrame, FALSE, nullptr);
 
         // commands
         const float clearColour[4] = {0.0f, 0.2f, 0.4f, 1.0f};
-        commandList->ClearRenderTargetView(rtvHandlePerFrame, clearColour, 0, nullptr);
+        renderState.commandList->ClearRenderTargetView(rtvHandlePerFrame, clearColour, 0, nullptr);
 
         // non bundle rendering
         // commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -620,10 +621,10 @@ int main(void)
         // commandList->DrawInstanced(3, 1, 0, 0);
 
         // bundle rendering
-        commandList->ExecuteBundle(bundle);
-        // CD3DX12_RESOURCE_BARRIER commandListResourceBarrierTransitionPixelShader = CD3DX12_RESOURCE_BARRIER::Transition(renderTargets[frameIndex], D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
-        commandList->ResourceBarrier(1, &commandListResourceBarrierTransitionRenderTarget);
-        hr = commandList->Close();
+        renderState.commandList->ExecuteBundle(renderState.bundle);
+        // CD3DX12_RESOURCE_BARRIER commandListResourceBarrierTransitionPixelShader = CD3DX12_RESOURCE_BARRIER::Transition(renderState.renderTargets[frameIndex], D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
+        renderState.commandList->ResourceBarrier(1, &commandListResourceBarrierTransitionRenderTarget);
+        hr = renderState.commandList->Close();
         if (FAILED(hr))
         {
             errhr("Failed to close command list (frame rendering)", hr);
@@ -632,7 +633,7 @@ int main(void)
         // end of populating command list
 
         // execute command list
-        ID3D12CommandList *commandListsPerFrame[] = {commandList};
+        ID3D12CommandList *commandListsPerFrame[] = {renderState.commandList};
         renderState.commandQueue->ExecuteCommandLists(_countof(commandListsPerFrame), commandListsPerFrame);
 
         hr = renderState.swapChain->Present(1, 0);
@@ -642,9 +643,9 @@ int main(void)
             return 1;
         }
 
-        // move to next frame
+        // move to next frame (framebuffering)
         const UINT64 currentFenceValue = fenceValues[frameIndex];
-        hr = renderState.commandQueue->Signal(fence, currentFenceValue);
+        hr = renderState.commandQueue->Signal(renderState.fence, currentFenceValue);
         if (FAILED(hr))
         {
             errhr("Signal failed", hr);
@@ -652,9 +653,9 @@ int main(void)
         }
         frameIndex = renderState.swapChain->GetCurrentBackBufferIndex();
 
-        if (fence->GetCompletedValue() < fenceValues[frameIndex])
+        if (renderState.fence->GetCompletedValue() < fenceValues[frameIndex])
         {
-            hr = fence->SetEventOnCompletion(fenceValues[frameIndex], fenceEvent);
+            hr = renderState.fence->SetEventOnCompletion(fenceValues[frameIndex], fenceEvent);
             if (FAILED(hr))
             {
                 errhr("SetEventOnCompletion failed", hr);
@@ -673,32 +674,32 @@ int main(void)
     // cleanup
     if (fenceEvent)
         CloseHandle(fenceEvent);
-    if (fence)
-        fence->Release();
-    if (texture)
-        texture->Release();
+    if (renderState.fence)
+        renderState.fence->Release();
+    if (renderState.texture)
+        renderState.texture->Release();
     if (textureUploadHeap)
         textureUploadHeap->Release();
-    if (vertexBuffer)
-        vertexBuffer->Release();
-    if (constantBuffer)
-        constantBuffer->Release();
-    if (bundle)
-        bundle->Release();
-    if (commandList)
-        commandList->Release();
-    if (pipelineState)
-        pipelineState->Release();
-    if (rootSignature)
-        rootSignature->Release();
+    if (renderState.vertexBuffer)
+        renderState.vertexBuffer->Release();
+    if (renderState.constantBuffer)
+        renderState.constantBuffer->Release();
+    if (renderState.bundle)
+        renderState.bundle->Release();
+    if (renderState.commandList)
+        renderState.commandList->Release();
+    if (renderState.pipelineState)
+        renderState.pipelineState->Release();
+    if (renderState.rootSignature)
+        renderState.rootSignature->Release();
     if (renderState.srvHeap)
         renderState.srvHeap->Release();
     if (renderState.rtvHeap)
         renderState.rtvHeap->Release();
     for (UINT i = 0; i < renderState.frameCount; ++i)
     {
-        if (renderTargets[i])
-            renderTargets[i]->Release();
+        if (renderState.renderTargets[i])
+            renderState.renderTargets[i]->Release();
         if (renderState.commandAllocators[i])
             renderState.commandAllocators[i]->Release();
     }
@@ -706,18 +707,18 @@ int main(void)
         renderState.swapChain->Release();
     if (renderState.commandQueue)
         renderState.commandQueue->Release();
-    if (bundleAllocator)
-        bundleAllocator->Release();
+    if (renderState.bundleAllocator)
+        renderState.bundleAllocator->Release();
     if (renderState.device)
         renderState.device->Release();
     if (renderState.hardwareAdapter)
         renderState.hardwareAdapter->Release();
     if (renderState.factory)
         renderState.factory->Release();
-    if (vertexShader)
-        vertexShader->Release();
-    if (pixelShader)
-        pixelShader->Release();
+    if (renderState.vertexShader)
+        renderState.vertexShader->Release();
+    if (renderState.pixelShader)
+        renderState.pixelShader->Release();
     if (signature)
         signature->Release();
     return (0);
