@@ -1,7 +1,9 @@
 cbuffer SceneConstantBuffer : register(b0)
 {
-    float4 offset;
-    float4 padding[15];
+    float4x4 world;
+    float4x4 view;
+    float4x4 projection;
+    // dword padding[128/4];
 };
 
 struct PSInput
@@ -13,11 +15,17 @@ struct PSInput
 Texture2D g_texture : register(t0);
 SamplerState g_sampler : register(s0);
 
-PSInput VSMain(float4 position : POSITION, float4 uv : TEXCOORD)
+PSInput VSMain(float3 position : POSITION, float2 uv : TEXCOORD)
 {
     PSInput result;
 
-    result.position = position + offset;
+    float4 newPosition = float4(position, 1.0f);    
+    newPosition = mul(world, newPosition);
+    newPosition = mul(view, newPosition);
+    newPosition = mul(projection, newPosition);
+ 
+
+    result.position = newPosition;    
     result.uv = uv;
 
     return result;

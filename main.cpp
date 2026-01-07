@@ -19,6 +19,17 @@
 #include "src/metadata.h"
 #include "src/error.h"
 
+void PrintMatrix(const DirectX::XMFLOAT4X4 &matrix)
+{
+    const float *m = &matrix._11;
+    SDL_Log("[\n");
+    SDL_Log("  %.3f  %.3f  %.3f  %.3f\n", m[0], m[1], m[2], m[3]);
+    SDL_Log("  %.3f  %.3f  %.3f  %.3f\n", m[4], m[5], m[6], m[7]);
+    SDL_Log("  %.3f  %.3f  %.3f  %.3f\n", m[8], m[9], m[10], m[11]);
+    SDL_Log("  %.3f  %.3f  %.3f  %.3f\n", m[12], m[13], m[14], m[15]);
+    SDL_Log("]\n\n");
+}
+
 static struct
 {
     SDL_Window *window;
@@ -29,9 +40,14 @@ static struct
 
 static struct
 {
-    DirectX::XMFLOAT4 offset;
-    float padding[60]; // Padding so the constant buffer is 256-byte aligned.
+    DirectX::XMFLOAT4X4 world;
+    DirectX::XMFLOAT4X4 view; // 4 x 4 matrix has 16 entries. 4 bytes per entry -> 64 bytes total
+    DirectX::XMFLOAT4X4 projection;
+    // DirectX::XMFLOAT4 offset;
+    // byte padding[128]; // Padding so the constant buffer is 256-byte aligned.
 } constantBufferData;
+// static_assert((sizeof(constantBufferData) % 256 == 0), "CBV must be a multiple of 256 bytes");
+// static_assert((sizeof(constantBufferData) >= 256), "CBV must be at least 256 bytes");
 
 static struct
 {
@@ -45,7 +61,7 @@ static struct
     ID3D12CommandQueue *commandQueue = nullptr;
     ID3D12DescriptorHeap *rtvHeap = nullptr;
     ID3D12DescriptorHeap *srvHeap = nullptr;
-    static const int frameCount = 2;
+    static const int frameCount = 3;
     ID3D12CommandAllocator *commandAllocators[frameCount] = {};
     ID3D12Resource *renderTargets[frameCount] = {};
     ID3D12CommandAllocator *bundleAllocator = nullptr;
@@ -137,7 +153,7 @@ int main(void)
         errhr("CreateCommandQueue failed", hr);
         return 1;
     }
-    
+
     DXGI_SWAP_CHAIN_DESC1 swapChainDesc = {};
     swapChainDesc.Width = (UINT)width;
     swapChainDesc.Height = (UINT)height;
@@ -190,7 +206,7 @@ int main(void)
         errhr("CreateDescriptorHeap failed (rtvHeap)", hr);
         return 1;
     }
-    
+
     D3D12_DESCRIPTOR_HEAP_DESC srvHeapDesc = {};
     srvHeapDesc.NumDescriptors = 2; // CBV + SRV
     srvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
@@ -207,7 +223,7 @@ int main(void)
 
     // create frame resources
     CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandleSetup(renderState.rtvHeap->GetCPUDescriptorHandleForHeapStart());
-        
+
     // rtv for each buffer (double or triple buffering)
     for (UINT n = 0; n < renderState.frameCount; n++)
     {
@@ -227,7 +243,7 @@ int main(void)
             return 1;
         }
     }
-    
+
     hr = renderState.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_BUNDLE, IID_PPV_ARGS(&renderState.bundleAllocator));
     if (FAILED(hr))
     {
@@ -279,7 +295,7 @@ int main(void)
         errhr("D3D12SerializeRootSignature failed", hr);
         return 1;
     }
-    
+
     hr = renderState.device->CreateRootSignature(0, signature->GetBufferPointer(), signature->GetBufferSize(), IID_PPV_ARGS(&renderState.rootSignature));
     if (FAILED(hr))
     {
@@ -287,7 +303,7 @@ int main(void)
         return 1;
     }
 
-    // create pipeline state (including shaders)    
+    // create pipeline state (including shaders)
 #if defined(_DEBUG)
     // Enable better shader debugging with the graphics debugging tools.
     UINT compileFlags = D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
@@ -313,12 +329,15 @@ int main(void)
             {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
             {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0}};
 
+    D3D12_RASTERIZER_DESC rasterizerDesc = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
+    rasterizerDesc.CullMode = D3D12_CULL_MODE_NONE; // Disable culling
+
     D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
     psoDesc.InputLayout = {inputElementDesc, _countof(inputElementDesc)};
     psoDesc.pRootSignature = renderState.rootSignature;
     psoDesc.VS = CD3DX12_SHADER_BYTECODE(renderState.vertexShader);
     psoDesc.PS = CD3DX12_SHADER_BYTECODE(renderState.pixelShader);
-    psoDesc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
+    psoDesc.RasterizerState = rasterizerDesc;
     psoDesc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
     psoDesc.DepthStencilState.DepthEnable = FALSE;
     psoDesc.DepthStencilState.StencilEnable = FALSE;
@@ -327,14 +346,14 @@ int main(void)
     psoDesc.NumRenderTargets = 1;
     psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
     psoDesc.SampleDesc.Count = 1;
-    
+
     hr = renderState.device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&renderState.pipelineState));
     if (FAILED(hr))
     {
         errhr("CreateGraphicsPipelineState failed", hr);
         return 1;
     }
-    
+
     hr = renderState.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, renderState.commandAllocators[frameIndex], nullptr, IID_PPV_ARGS(&renderState.commandList));
     if (FAILED(hr))
     {
@@ -359,15 +378,15 @@ int main(void)
         DirectX::XMFLOAT2 texCoords;
     };
 
-    const float aspectRatio = 16.0f / 9.0f;
+    const float aspectRatio = (float)width / (float)height;
     vertex triangleVertices[] = {
-        {{0.0f, 0.25f * aspectRatio, 0.0f}, {0.5f, 0.0f}},
-        {{0.25f, -0.25f * aspectRatio, 0.0f}, {1.0f, 1.0f}},
-        {{-0.25f, -0.25f * aspectRatio, 0.0f}, {0.0f, 1.0f}}};
+        {{0.0f, 0.9f, 0.0f}, {0.5f, 0.0f}},
+        {{0.9f, -0.9f, 0.0f}, {1.0f, 1.0f}},
+        {{-0.9f, -0.9f, 0.0f}, {0.0f, 1.0f}}};
 
     const UINT vertexBufferSize = sizeof(triangleVertices);
 
-    // create constant buffer    
+    // create constant buffer
     const UINT constantBufferSize = 256U;
     static UINT *CbvDataBegin = nullptr;
 
@@ -399,7 +418,7 @@ int main(void)
     // Note: using upload heaps to transfer static data like vert buffers is not
     // recommended. Every time the GPU needs it, the upload heap will be marshalled
     // over. Please read up on Default Heap usage. An upload heap is used here for
-    // code simplicity and because there are very few verts to actually transfer.    
+    // code simplicity and because there are very few verts to actually transfer.
     CD3DX12_RESOURCE_DESC vertexBufferDesc = CD3DX12_RESOURCE_DESC::Buffer(vertexBufferSize);
     hr = renderState.device->CreateCommittedResource(
         &heapPropsUpload,
@@ -423,7 +442,7 @@ int main(void)
     vertexBufferView.StrideInBytes = sizeof(vertex);
     vertexBufferView.SizeInBytes = vertexBufferSize;
 
-    // CREATE BUNDLE    
+    // CREATE BUNDLE
     hr = renderState.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_BUNDLE, renderState.bundleAllocator, renderState.pipelineState, IID_PPV_ARGS(&renderState.bundle));
     if (FAILED(hr))
     {
@@ -461,7 +480,7 @@ int main(void)
     textureDesc.SampleDesc.Quality = 0;
     textureDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
 
-    CD3DX12_HEAP_PROPERTIES heapPropsDefault(D3D12_HEAP_TYPE_DEFAULT);    
+    CD3DX12_HEAP_PROPERTIES heapPropsDefault(D3D12_HEAP_TYPE_DEFAULT);
     hr = renderState.device->CreateCommittedResource(
         &heapPropsDefault,
         D3D12_HEAP_FLAG_NONE,
@@ -516,7 +535,7 @@ int main(void)
     renderState.commandQueue->ExecuteCommandLists(_countof(commandListsSetup), commandListsSetup);
 
     // create synchronisation objects
-    
+
     UINT64 fenceValues[renderState.frameCount] = {};
     hr = renderState.device->CreateFence(fenceValues[frameIndex], D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&renderState.fence));
     fenceValues[frameIndex]++;
@@ -567,13 +586,42 @@ int main(void)
         // main loop main body
         // update here
         const float translationSpeed = 0.005f;
-        const float offsetBounds = 1.25f;
+        const float offsetBounds = 1.0f;
+        static float movingPoint = 0;
 
-        constantBufferData.offset.x += translationSpeed;
-        if (constantBufferData.offset.x > offsetBounds)
+        movingPoint += translationSpeed;
+        if (movingPoint > offsetBounds)
         {
-            constantBufferData.offset.x = -offsetBounds;
+            movingPoint = -offsetBounds;
         }
+
+        // main matrix update
+        // main view and projection matrices setup
+        DirectX::XMMATRIX world = DirectX::XMMatrixIdentity();
+
+        float radius = 4.0f;
+        float angle = movingPoint * DirectX::XM_2PI;
+        DirectX::XMVECTOR eye = DirectX::XMVectorSet(radius * cosf(angle), 0.0f, radius * sinf(angle), 0.0f);
+        DirectX::XMVECTOR at = DirectX::XMVectorZero();
+        DirectX::XMVECTOR up = DirectX::XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
+        DirectX::XMMATRIX view = DirectX::XMMatrixLookAtLH(eye, at, up);
+        // view = DirectX::XMMatrixIdentity();
+
+        float fov = DirectX::XMConvertToRadians(60.0f);
+        float nearZ = 0.1f;
+        float farZ = 100.0f;
+        DirectX::XMMATRIX projection = DirectX::XMMatrixPerspectiveFovLH(fov, aspectRatio, nearZ, farZ);
+        // DirectX::XMMATRIX projection = DirectX::XMMatrixOrthographicLH(2.0f, 2.0f, 0.1f, 100.0f);
+
+        // projection = DirectX::XMMatrixIdentity();
+        DirectX::XMStoreFloat4x4(&constantBufferData.world, world);
+        DirectX::XMStoreFloat4x4(&constantBufferData.view, view);
+        DirectX::XMStoreFloat4x4(&constantBufferData.projection, projection);
+
+        printf("VIEW:\n");
+        PrintMatrix(constantBufferData.view);
+        printf("PROJECTION:\n");
+        PrintMatrix(constantBufferData.projection);
 
         memcpy(CbvDataBegin, &constantBufferData, sizeof(constantBufferData));
 
@@ -616,12 +664,12 @@ int main(void)
         renderState.commandList->ClearRenderTargetView(rtvHandlePerFrame, clearColour, 0, nullptr);
 
         // non bundle rendering
-        // commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        // commandList->IASetVertexBuffers(0, 1, &vertexBufferView);
-        // commandList->DrawInstanced(3, 1, 0, 0);
+        renderState.commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        renderState.commandList->IASetVertexBuffers(0, 1, &vertexBufferView);
+        renderState.commandList->DrawInstanced(3, 1, 0, 0);
 
         // bundle rendering
-        renderState.commandList->ExecuteBundle(renderState.bundle);
+        // renderState.commandList->ExecuteBundle(renderState.bundle);
         // CD3DX12_RESOURCE_BARRIER commandListResourceBarrierTransitionPixelShader = CD3DX12_RESOURCE_BARRIER::Transition(renderState.renderTargets[frameIndex], D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
         renderState.commandList->ResourceBarrier(1, &commandListResourceBarrierTransitionRenderTarget);
         hr = renderState.commandList->Close();
