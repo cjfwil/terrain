@@ -36,7 +36,7 @@ void PrintMatrix(const DirectX::XMFLOAT4X4 &matrix)
 }
 
 // Simple free list based allocator
-struct ExampleDescriptorHeapAllocator
+struct DescriptorHeapAllocator
 {
     ID3D12DescriptorHeap *Heap = nullptr;
     D3D12_DESCRIPTOR_HEAP_TYPE HeapType = D3D12_DESCRIPTOR_HEAP_TYPE_NUM_TYPES;
@@ -93,16 +93,12 @@ static struct
     DirectX::XMFLOAT4X4 world;
     DirectX::XMFLOAT4X4 view; // 4 x 4 matrix has 16 entries. 4 bytes per entry -> 64 bytes total
     DirectX::XMFLOAT4X4 projection;
-    // DirectX::XMFLOAT4 offset;
-    // byte padding[128]; // Padding so the constant buffer is 256-byte aligned.
 } constantBufferData;
-// static_assert((sizeof(constantBufferData) % 256 == 0), "CBV must be a multiple of 256 bytes");
-// static_assert((sizeof(constantBufferData) >= 256), "CBV must be at least 256 bytes");
 
 static struct
 {
     ID3D12DescriptorHeap *imguiSrvHeap = nullptr;
-    ExampleDescriptorHeapAllocator imguiSrvAllocator;
+    DescriptorHeapAllocator imguiSrvAllocator;
     // init
     IDXGIFactory6 *factory = nullptr;
     IDXGIAdapter4 *hardwareAdapter = nullptr;
@@ -337,7 +333,7 @@ int main(void)
     rootParameters[1].InitAsDescriptorTable(1, &ranges[1], D3D12_SHADER_VISIBILITY_PIXEL);  // srv
 
     D3D12_STATIC_SAMPLER_DESC sampler = {};
-    sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+    sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_POINT;
     sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
     sampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
     sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
@@ -532,9 +528,9 @@ int main(void)
         int x = i % texWidth;
         int y = i / texHeight;
         if ((x + y) % 2 == 0)
-            textureData[i] = 0xfffff000;
+            textureData[i] = 0xff444411;
         else
-            textureData[i] = 0xff000fff;
+            textureData[i] = 0xff44cc11;
     }
 
     ID3D12Resource *textureUploadHeap = nullptr;
@@ -681,9 +677,19 @@ int main(void)
         ImGui_ImplDX12_NewFrame();
         ImGui_ImplSDL3_NewFrame();
         ImGui::NewFrame();
-        static bool show_demo_window = true;
+        static bool show_demo_window = false;
         if (show_demo_window)
             ImGui::ShowDemoWindow(&show_demo_window);
+        ImGui::Text("Application average %.3f ms/frame (%.1f FPS)",
+                    1000.0f / ImGui::GetIO().Framerate,
+                    ImGui::GetIO().Framerate);
+
+        // basic profiling
+        static float frameRateHistory[256] = {};
+        uint64_t frameHistoryIndex = programState.ticksElapsed % 256;
+        frameRateHistory[frameHistoryIndex] = ImGui::GetIO().Framerate;
+        ImGui::PlotLines("Frametime", frameRateHistory, IM_ARRAYSIZE(frameRateHistory), (int)frameHistoryIndex);
+
 
         // main loop main body
         // update here
@@ -824,9 +830,9 @@ int main(void)
     SDL_Quit();
 
     // cleanup
-    // ImGui_ImplDX12_Shutdown();
-    // ImGui_ImplSDL3_Shutdown();
-    // ImGui::DestroyContext();
+    ImGui_ImplDX12_Shutdown();
+    ImGui_ImplSDL3_Shutdown();
+    ImGui::DestroyContext();
 
     if (fenceEvent)
         CloseHandle(fenceEvent);

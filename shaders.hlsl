@@ -2,8 +2,7 @@ cbuffer SceneConstantBuffer : register(b0)
 {
     float4x4 world;
     float4x4 view;
-    float4x4 projection;
-    // dword padding[128/4];
+    float4x4 projection;    
 };
 
 struct PSInput
