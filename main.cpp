@@ -5,6 +5,8 @@
 #pragma comment(lib, "d3dcompiler.lib")
 #pragma comment(lib, "dxguid.lib")
 #pragma comment(lib, "imgui.lib")
+#pragma comment(lib, "DirectXTex.lib")
+#pragma comment(lib, "ole32.lib")
 
 #pragma warning(push, 0)
 #include <directx/d3dx12.h>
@@ -16,6 +18,8 @@
 #include <imgui.h>
 #include <backends/imgui_impl_sdl3.h>
 #include <backends/imgui_impl_dx12.h>
+
+#include <DirectXTex.h>
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_thread.h>
@@ -123,6 +127,7 @@ static struct
     ID3D12Resource *vertexBuffer = nullptr;
     ID3D12GraphicsCommandList *bundle = nullptr;
     const DXGI_FORMAT rtvFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
+
     // end of init
 } renderState;
 
@@ -202,7 +207,7 @@ int main(void)
         return 1;
     }
 
-    static bool vsync = false;
+    static bool vsync = true;
     DXGI_SWAP_CHAIN_DESC1 swapChainDesc = {};
     swapChainDesc.Width = (UINT)width;
     swapChainDesc.Height = (UINT)height;
@@ -215,7 +220,7 @@ int main(void)
     swapChainDesc.Scaling = DXGI_SCALING_NONE;
     swapChainDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
     swapChainDesc.AlphaMode = DXGI_ALPHA_MODE_UNSPECIFIED;
-    swapChainDesc.Flags = (vsync) ? DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH : DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;
+    swapChainDesc.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;
 
     SDL_PropertiesID props = SDL_GetWindowProperties(programState.window);
     HWND hwnd = nullptr;
@@ -521,32 +526,41 @@ int main(void)
     renderState.bundle->DrawInstanced(3, 1, 0, 0);
     renderState.bundle->Close();
 
-    const int texWidth = 16;
-    const int texHeight = 16;
-    unsigned int textureData[texWidth * texHeight] = {};
-    for (int i = 0; i < texWidth * texHeight; ++i)
+    // ------------------------------------------------------------
+    // Load BC7 DDS (with baked mipmaps) using DirectXTex
+    // ------------------------------------------------------------
+    DirectX::ScratchImage image;
+    DirectX::TexMetadata metadata;
+
+    hr = DirectX::LoadFromDDSFile(
+        L"ground_texture_0.dds",
+        DirectX::DDS_FLAGS_NONE,
+        &metadata,
+        image);
+    if (FAILED(hr))
     {
-        int x = i % texWidth;
-        int y = i / texHeight;
-        if ((x + y) % 2 == 0)
-            textureData[i] = 0xff444411;
-        else
-            textureData[i] = 0xff44cc11;
+        errhr("LoadFromDDSFile failed", hr);
+        return 1;
     }
 
-    ID3D12Resource *textureUploadHeap = nullptr;
+    // ------------------------------------------------------------
+    // Create GPU texture resource
+    // ------------------------------------------------------------
     D3D12_RESOURCE_DESC textureDesc = {};
-    textureDesc.MipLevels = 1;
-    textureDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-    textureDesc.Width = texWidth;
-    textureDesc.Height = texHeight;
-    textureDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
-    textureDesc.DepthOrArraySize = 1;
+    textureDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    textureDesc.Alignment = 0;
+    textureDesc.Width = (UINT)metadata.width;
+    textureDesc.Height = (UINT)metadata.height;
+    textureDesc.DepthOrArraySize = (UINT16)metadata.arraySize;
+    textureDesc.MipLevels = (UINT16)metadata.mipLevels;
+    textureDesc.Format = metadata.format; // DXGI_FORMAT_BC7_UNORM or BC7_UNORM_SRGB
     textureDesc.SampleDesc.Count = 1;
     textureDesc.SampleDesc.Quality = 0;
-    textureDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    textureDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+    textureDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
 
     CD3DX12_HEAP_PROPERTIES heapPropsDefault(D3D12_HEAP_TYPE_DEFAULT);
+
     hr = renderState.device->CreateCommittedResource(
         &heapPropsDefault,
         D3D12_HEAP_FLAG_NONE,
@@ -559,42 +573,159 @@ int main(void)
         errhr("CreateCommittedResource (texture)", hr);
         return 1;
     }
-    const UINT64 uploadBufferSize = GetRequiredIntermediateSize(renderState.texture, 0, 1);
 
-    // gpu upload buffer
-    CD3DX12_RESOURCE_DESC uploadBufferDesc = CD3DX12_RESOURCE_DESC::Buffer(uploadBufferSize);
+    // ------------------------------------------------------------
+    // Prepare subresources (DirectXTex gives correct BC7 pitches)
+    // ------------------------------------------------------------
+    std::vector<D3D12_SUBRESOURCE_DATA> subresources;
+    subresources.reserve(image.GetImageCount());
+
+    const DirectX::Image *imgs = image.GetImages();
+    for (size_t i = 0; i < image.GetImageCount(); ++i)
+    {
+        D3D12_SUBRESOURCE_DATA s = {};
+        s.pData = imgs[i].pixels;
+        s.RowPitch = imgs[i].rowPitch;
+        s.SlicePitch = imgs[i].slicePitch;
+        subresources.push_back(s);
+    }
+
+    // ------------------------------------------------------------
+    // Create upload heap
+    // ------------------------------------------------------------
+    UINT64 uploadBufferSize =
+        GetRequiredIntermediateSize(renderState.texture, 0, (UINT)subresources.size());
+
+    // CD3DX12_HEAP_PROPERTIES heapPropsUpload(D3D12_HEAP_TYPE_UPLOAD);
+    auto uploadDesc = CD3DX12_RESOURCE_DESC::Buffer(uploadBufferSize);
+
+    ID3D12Resource *textureUploadHeap = nullptr;
     hr = renderState.device->CreateCommittedResource(
         &heapPropsUpload,
         D3D12_HEAP_FLAG_NONE,
-        &uploadBufferDesc,
+        &uploadDesc,
         D3D12_RESOURCE_STATE_GENERIC_READ,
         nullptr,
         IID_PPV_ARGS(&textureUploadHeap));
     if (FAILED(hr))
     {
-        errhr("CreateCommittedResource failed (gpu upload buffer)", hr);
+        errhr("CreateCommittedResource (upload buffer)", hr);
         return 1;
     }
 
-    D3D12_SUBRESOURCE_DATA textureDataDesc = {};
-    textureDataDesc.pData = textureData;
-    textureDataDesc.RowPitch = texWidth * sizeof(textureData[0]);
-    textureDataDesc.SlicePitch = textureDataDesc.RowPitch * texHeight;
+    // ------------------------------------------------------------
+    // Upload all mip levels
+    // ------------------------------------------------------------
+    UpdateSubresources(
+        renderState.commandList,
+        renderState.texture,
+        textureUploadHeap,
+        0, 0,
+        (UINT)subresources.size(),
+        subresources.data());
 
-    UpdateSubresources(renderState.commandList, renderState.texture, textureUploadHeap, 0, 0, 1, &textureDataDesc);
+    // Transition to shader resource
+    auto barrier = CD3DX12_RESOURCE_BARRIER::Transition(
+        renderState.texture,
+        D3D12_RESOURCE_STATE_COPY_DEST,
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    renderState.commandList->ResourceBarrier(1, &barrier);
+
+    // ------------------------------------------------------------
+    // Create SRV
+    // ------------------------------------------------------------
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srvDesc.Format = metadata.format; // must match BC7 format
+    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    srvDesc.Texture2D.MipLevels = (UINT)metadata.mipLevels;
+
+    D3D12_CPU_DESCRIPTOR_HANDLE srvHandleCPU =
+        renderState.srvHeap->GetCPUDescriptorHandleForHeapStart();
+    srvHandleCPU.ptr += cbvSrvDescriptorSize;
+
+    renderState.device->CreateShaderResourceView(
+        renderState.texture,
+        &srvDesc,
+        srvHandleCPU);
+
+    // // generate texture
+    // const int texWidth = 16;
+    // const int texHeight = 16;
+    // unsigned int textureData[texWidth * texHeight] = {};
+    // for (int i = 0; i < texWidth * texHeight; ++i)
+    // {
+    //     int x = i % texWidth;
+    //     int y = i / texHeight;
+    //     if ((x + y) % 2 == 0)
+    //         textureData[i] = 0xff444411;
+    //     else
+    //         textureData[i] = 0xff44cc11;
+    // }
+
+    // ID3D12Resource *textureUploadHeap = nullptr;
+    // D3D12_RESOURCE_DESC textureDesc = {};
+    // textureDesc.MipLevels = 1;
+    // textureDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    // textureDesc.Width = texWidth;
+    // textureDesc.Height = texHeight;
+    // textureDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
+    // textureDesc.DepthOrArraySize = 1;
+    // textureDesc.SampleDesc.Count = 1;
+    // textureDesc.SampleDesc.Quality = 0;
+    // textureDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+
+    // CD3DX12_HEAP_PROPERTIES heapPropsDefault(D3D12_HEAP_TYPE_DEFAULT);
+    // hr = renderState.device->CreateCommittedResource(
+    //     &heapPropsDefault,
+    //     D3D12_HEAP_FLAG_NONE,
+    //     &textureDesc,
+    //     D3D12_RESOURCE_STATE_COPY_DEST,
+    //     nullptr,
+    //     IID_PPV_ARGS(&renderState.texture));
+    // if (FAILED(hr))
+    // {
+    //     errhr("CreateCommittedResource (texture)", hr);
+    //     return 1;
+    // }
+    // const UINT64 uploadBufferSize = GetRequiredIntermediateSize(renderState.texture, 0, 1);
+
+    // // gpu upload buffer
+    // CD3DX12_RESOURCE_DESC uploadBufferDesc = CD3DX12_RESOURCE_DESC::Buffer(uploadBufferSize);
+    // hr = renderState.device->CreateCommittedResource(
+    //     &heapPropsUpload,
+    //     D3D12_HEAP_FLAG_NONE,
+    //     &uploadBufferDesc,
+    //     D3D12_RESOURCE_STATE_GENERIC_READ,
+    //     nullptr,
+    //     IID_PPV_ARGS(&textureUploadHeap));
+    // if (FAILED(hr))
+    // {
+    //     errhr("CreateCommittedResource failed (gpu upload buffer)", hr);
+    //     return 1;
+    // }
+
+    // D3D12_SUBRESOURCE_DATA textureDataDesc = {};
+    // textureDataDesc.pData = textureData;
+    // textureDataDesc.RowPitch = texWidth * sizeof(textureData[0]);
+    // textureDataDesc.SlicePitch = textureDataDesc.RowPitch * texHeight;
+
+    // UpdateSubresources(renderState.commandList, renderState.texture, textureUploadHeap, 0, 0, 1, &textureDataDesc);
+
     CD3DX12_RESOURCE_BARRIER commandListResourceBarrierTransitionPixelShader = CD3DX12_RESOURCE_BARRIER::Transition(renderState.texture, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     renderState.commandList->ResourceBarrier(1, &commandListResourceBarrierTransitionPixelShader);
 
     // SRV for texture
 
-    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    srvDesc.Format = textureDesc.Format;
-    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-    srvDesc.Texture2D.MipLevels = 1;
-    D3D12_CPU_DESCRIPTOR_HANDLE srvHandleCPU = renderState.srvHeap->GetCPUDescriptorHandleForHeapStart();
-    srvHandleCPU.ptr += cbvSrvDescriptorSize;
+    // D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+    // srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    // srvDesc.Format = textureDesc.Format;
+    // srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    // srvDesc.Texture2D.MipLevels = 1;
+    // D3D12_CPU_DESCRIPTOR_HANDLE srvHandleCPU = renderState.srvHeap->GetCPUDescriptorHandleForHeapStart();
+    // srvHandleCPU.ptr += cbvSrvDescriptorSize;
     renderState.device->CreateShaderResourceView(renderState.texture, &srvDesc, srvHandleCPU);
+    // end of texture
 
     renderState.commandList->Close();
     ID3D12CommandList *commandListsSetup[] = {renderState.commandList};
@@ -702,16 +833,19 @@ int main(void)
             uint64_t frameHistoryIndex = programState.ticksElapsed % 256;
             frameRateHistory[frameHistoryIndex] = ImGui::GetIO().Framerate;
             ImGui::PlotLines("Frametime", frameRateHistory, IM_ARRAYSIZE(frameRateHistory), (int)frameHistoryIndex);
+            ImGui::Checkbox("VSync", &vsync);
         }
 
-        // main loop main body        
+        // main loop main body
         uint64_t currentCounter = SDL_GetPerformanceCounter();
         deltaTime = ((float)(currentCounter - lastCounter)) / (float)SDL_GetPerformanceFrequency();
-        lastCounter = currentCounter;        
+        if (deltaTime > 0.1f)
+            deltaTime = 0.1f;
 
+        lastCounter = currentCounter;
 
         // update here
-        const float translationSpeed = 0.5f * deltaTime;
+        const float translationSpeed = 0.2f * deltaTime;
         const float offsetBounds = 1.0f;
         static float movingPoint = 0;
 
