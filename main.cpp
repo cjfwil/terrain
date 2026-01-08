@@ -140,7 +140,7 @@ int main(void)
     int width = 1920;
     int height = 1080;
 
-    programState.window = SDL_CreateWindow(APP_WINDOW_TITLE, (int)width, (int)height, SDL_WINDOW_FULLSCREEN);
+    programState.window = SDL_CreateWindow(APP_WINDOW_TITLE, (int)width, (int)height, SDL_WINDOW_BORDERLESS);
     if (!programState.window)
     {
         err("SDL_CreateWindow failed");
@@ -202,6 +202,7 @@ int main(void)
         return 1;
     }
 
+    static bool vsync = false;
     DXGI_SWAP_CHAIN_DESC1 swapChainDesc = {};
     swapChainDesc.Width = (UINT)width;
     swapChainDesc.Height = (UINT)height;
@@ -214,7 +215,7 @@ int main(void)
     swapChainDesc.Scaling = DXGI_SCALING_NONE;
     swapChainDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
     swapChainDesc.AlphaMode = DXGI_ALPHA_MODE_UNSPECIFIED;
-    swapChainDesc.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
+    swapChainDesc.Flags = (vsync) ? DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH : DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;
 
     SDL_PropertiesID props = SDL_GetWindowProperties(programState.window);
     HWND hwnd = nullptr;
@@ -632,31 +633,40 @@ int main(void)
     scissorRect.right = static_cast<LONG>(width);
     scissorRect.bottom = static_cast<LONG>(height);
 
-    // imgui setup
-    IMGUI_CHECKVERSION();
-    ImGui::CreateContext();
-    ImGuiIO &io = ImGui::GetIO();
-    (void)io;
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard; // Enable Keyboard Controls
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;  // Enable Gamepad Controls
-    ImGui::StyleColorsDark();
+    static bool enableImgui = true;
+    bool imguiInitialised = false;
+    if (enableImgui)
+    {
+        // imgui setup
+        IMGUI_CHECKVERSION();
+        ImGui::CreateContext();
+        ImGuiIO &io = ImGui::GetIO();
+        (void)io;
+        io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard; // Enable Keyboard Controls
+        io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;  // Enable Gamepad Controls
+        ImGui::StyleColorsDark();
 
-    ImGui_ImplSDL3_InitForD3D(programState.window);
+        ImGui_ImplSDL3_InitForD3D(programState.window);
 
-    // renderState.imguiSrvAllocator.Create(renderState.device, renderState.srvHeap);
-    ImGui_ImplDX12_InitInfo init_info = {};
-    init_info.Device = renderState.device;
-    init_info.CommandQueue = renderState.commandQueue;
-    init_info.NumFramesInFlight = renderState.frameCount;
-    init_info.RTVFormat = renderState.rtvFormat;
-    init_info.DSVFormat = DXGI_FORMAT_UNKNOWN;
-    init_info.SrvDescriptorHeap = renderState.imguiSrvHeap;
-    init_info.SrvDescriptorAllocFn = [](ImGui_ImplDX12_InitInfo *, D3D12_CPU_DESCRIPTOR_HANDLE *out_cpu_handle, D3D12_GPU_DESCRIPTOR_HANDLE *out_gpu_handle)
-    { return renderState.imguiSrvAllocator.Alloc(out_cpu_handle, out_gpu_handle); };
-    init_info.SrvDescriptorFreeFn = [](ImGui_ImplDX12_InitInfo *, D3D12_CPU_DESCRIPTOR_HANDLE cpu_handle, D3D12_GPU_DESCRIPTOR_HANDLE gpu_handle)
-    { return renderState.imguiSrvAllocator.Free(cpu_handle, gpu_handle); };
-    ImGui_ImplDX12_Init(&init_info);
+        // renderState.imguiSrvAllocator.Create(renderState.device, renderState.srvHeap);
+        ImGui_ImplDX12_InitInfo init_info = {};
+        init_info.Device = renderState.device;
+        init_info.CommandQueue = renderState.commandQueue;
+        init_info.NumFramesInFlight = renderState.frameCount;
+        init_info.RTVFormat = renderState.rtvFormat;
+        init_info.DSVFormat = DXGI_FORMAT_UNKNOWN;
+        init_info.SrvDescriptorHeap = renderState.imguiSrvHeap;
+        init_info.SrvDescriptorAllocFn = [](ImGui_ImplDX12_InitInfo *, D3D12_CPU_DESCRIPTOR_HANDLE *out_cpu_handle, D3D12_GPU_DESCRIPTOR_HANDLE *out_gpu_handle)
+        { return renderState.imguiSrvAllocator.Alloc(out_cpu_handle, out_gpu_handle); };
+        init_info.SrvDescriptorFreeFn = [](ImGui_ImplDX12_InitInfo *, D3D12_CPU_DESCRIPTOR_HANDLE cpu_handle, D3D12_GPU_DESCRIPTOR_HANDLE gpu_handle)
+        { return renderState.imguiSrvAllocator.Free(cpu_handle, gpu_handle); };
+        ImGui_ImplDX12_Init(&init_info);
 
+        imguiInitialised = true;
+    }
+
+    uint64_t lastCounter = SDL_GetPerformanceCounter();
+    float deltaTime = 0.0f;
     // main program
     programState.isRunning = true;
     while (programState.isRunning)
@@ -664,7 +674,8 @@ int main(void)
         SDL_Event sdlEvent;
         while (SDL_PollEvent(&sdlEvent))
         {
-            ImGui_ImplSDL3_ProcessEvent(&sdlEvent);
+            if (enableImgui)
+                ImGui_ImplSDL3_ProcessEvent(&sdlEvent);
             switch (sdlEvent.type)
             {
             case SDL_EVENT_QUIT:
@@ -674,26 +685,33 @@ int main(void)
         }
         programState.msElapsedSinceSDLInit = SDL_GetTicks();
 
-        ImGui_ImplDX12_NewFrame();
-        ImGui_ImplSDL3_NewFrame();
-        ImGui::NewFrame();
-        static bool show_demo_window = false;
-        if (show_demo_window)
-            ImGui::ShowDemoWindow(&show_demo_window);
-        ImGui::Text("Application average %.3f ms/frame (%.1f FPS)",
-                    1000.0f / ImGui::GetIO().Framerate,
-                    ImGui::GetIO().Framerate);
+        if (enableImgui)
+        {
+            ImGui_ImplDX12_NewFrame();
+            ImGui_ImplSDL3_NewFrame();
+            ImGui::NewFrame();
+            static bool show_demo_window = false;
+            if (show_demo_window)
+                ImGui::ShowDemoWindow(&show_demo_window);
+            ImGui::Text("Application average %.3f ms/frame (%.1f FPS)",
+                        1000.0f / ImGui::GetIO().Framerate,
+                        ImGui::GetIO().Framerate);
 
-        // basic profiling
-        static float frameRateHistory[256] = {};
-        uint64_t frameHistoryIndex = programState.ticksElapsed % 256;
-        frameRateHistory[frameHistoryIndex] = ImGui::GetIO().Framerate;
-        ImGui::PlotLines("Frametime", frameRateHistory, IM_ARRAYSIZE(frameRateHistory), (int)frameHistoryIndex);
+            // basic profiling
+            static float frameRateHistory[256] = {};
+            uint64_t frameHistoryIndex = programState.ticksElapsed % 256;
+            frameRateHistory[frameHistoryIndex] = ImGui::GetIO().Framerate;
+            ImGui::PlotLines("Frametime", frameRateHistory, IM_ARRAYSIZE(frameRateHistory), (int)frameHistoryIndex);
+        }
+
+        // main loop main body        
+        uint64_t currentCounter = SDL_GetPerformanceCounter();
+        deltaTime = ((float)(currentCounter - lastCounter)) / (float)SDL_GetPerformanceFrequency();
+        lastCounter = currentCounter;        
 
 
-        // main loop main body
         // update here
-        const float translationSpeed = 0.005f;
+        const float translationSpeed = 0.5f * deltaTime;
         const float offsetBounds = 1.0f;
         static float movingPoint = 0;
 
@@ -728,7 +746,8 @@ int main(void)
 
         memcpy(CbvDataBegin, &constantBufferData, sizeof(constantBufferData));
 
-        ImGui::Render();
+        if (enableImgui)
+            ImGui::Render();
         // render here
         // populate command list
         hr = renderState.commandAllocators[frameIndex]->Reset();
@@ -775,7 +794,8 @@ int main(void)
         // bundle rendering
         // renderState.commandList->ExecuteBundle(renderState.bundle);
 
-        ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), renderState.commandList);
+        if (enableImgui)
+            ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), renderState.commandList);
 
         // CD3DX12_RESOURCE_BARRIER commandListResourceBarrierTransitionPixelShader = CD3DX12_RESOURCE_BARRIER::Transition(renderState.renderTargets[frameIndex], D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
         renderState.commandList->ResourceBarrier(1, &commandListResourceBarrierTransitionRenderTarget);
@@ -791,7 +811,7 @@ int main(void)
         ID3D12CommandList *commandListsPerFrame[] = {renderState.commandList};
         renderState.commandQueue->ExecuteCommandLists(_countof(commandListsPerFrame), commandListsPerFrame);
 
-        hr = renderState.swapChain->Present(1, 0);
+        hr = renderState.swapChain->Present((vsync) ? 1 : 0, (vsync) ? 0 : DXGI_PRESENT_ALLOW_TEARING);
         if (FAILED(hr))
         {
             errhr("Present failed", hr);
@@ -830,9 +850,12 @@ int main(void)
     SDL_Quit();
 
     // cleanup
-    ImGui_ImplDX12_Shutdown();
-    ImGui_ImplSDL3_Shutdown();
-    ImGui::DestroyContext();
+    if (imguiInitialised)
+    {
+        ImGui_ImplDX12_Shutdown();
+        ImGui_ImplSDL3_Shutdown();
+        ImGui::DestroyContext();
+    }
 
     if (fenceEvent)
         CloseHandle(fenceEvent);
