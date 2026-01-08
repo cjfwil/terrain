@@ -339,12 +339,12 @@ int main(void)
     rootParameters[1].InitAsDescriptorTable(1, &ranges[1], D3D12_SHADER_VISIBILITY_PIXEL);  // srv
 
     D3D12_STATIC_SAMPLER_DESC sampler = {};
-    sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_POINT;
+    sampler.Filter = D3D12_FILTER_ANISOTROPIC;
     sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
     sampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
     sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
     sampler.MipLODBias = 0;
-    sampler.MaxAnisotropy = 0;
+    sampler.MaxAnisotropy = 16;
     sampler.ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER;
     sampler.BorderColor = D3D12_STATIC_BORDER_COLOR_TRANSPARENT_BLACK;
     sampler.MinLOD = 0.0f;
@@ -451,9 +451,14 @@ int main(void)
 
     const float aspectRatio = (float)width / (float)height;
     vertex triangleVertices[] = {
-        {{0.0f, 0.9f, 0.0f}, {0.5f, 0.0f}},
-        {{0.9f, -0.9f, 0.0f}, {1.0f, 1.0f}},
-        {{-0.9f, -0.9f, 0.0f}, {0.0f, 1.0f}}};
+        {{-1.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
+        {{1.0f, -1.0f, 0.0f}, {1.0f, 1.0f}},
+        {{-1.0f, -1.0f, 0.0f}, {0.0f, 1.0f}},
+
+        {{-1.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
+        {{1.0f, 1.0f, 0.0f}, {1.0f, 0.0f}},
+        {{1.0f, -1.0f, 0.0f}, {1.0f, 1.0f}}
+    };
 
     const UINT vertexBufferSize = sizeof(triangleVertices);
 
@@ -523,7 +528,7 @@ int main(void)
     renderState.bundle->SetGraphicsRootSignature(renderState.rootSignature);
     renderState.bundle->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     renderState.bundle->IASetVertexBuffers(0, 1, &vertexBufferView);
-    renderState.bundle->DrawInstanced(3, 1, 0, 0);
+    renderState.bundle->DrawInstanced(6, 1, 0, 0);
     renderState.bundle->Close();
 
     // ------------------------------------------------------------
@@ -923,7 +928,7 @@ int main(void)
         // non bundle rendering
         renderState.commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         renderState.commandList->IASetVertexBuffers(0, 1, &vertexBufferView);
-        renderState.commandList->DrawInstanced(3, 1, 0, 0);
+        renderState.commandList->DrawInstanced(6, 1, 0, 0);
 
         // bundle rendering
         // renderState.commandList->ExecuteBundle(renderState.bundle);
