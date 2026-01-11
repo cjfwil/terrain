@@ -805,6 +805,7 @@ int main(void)
     }
 
     // enable mouse look
+    static bool mouseLookEnabled = true;
     SDL_SetWindowRelativeMouseMode(programState.window, true);
     float mouseXrel = 0.0f;
     float mouseYrel = 0.0f;
@@ -831,9 +832,14 @@ int main(void)
                 programState.isRunning = false;
                 break;
             case SDL_EVENT_MOUSE_MOTION:
-                mouseXrel = sdlEvent.motion.xrel;
-                mouseYrel = sdlEvent.motion.yrel;
-                break;
+            {
+                if (mouseLookEnabled)
+                {
+                    mouseXrel = sdlEvent.motion.xrel;
+                    mouseYrel = sdlEvent.motion.yrel;
+                }
+            }
+            break;
             case SDL_EVENT_KEY_DOWN:
             {
                 SDL_Keycode sym = sdlEvent.key.key;
@@ -845,6 +851,11 @@ int main(void)
                     inputMotionYAxis = -1.0f;
                 if (sym == SDLK_D)
                     inputMotionXAxis = -1.0f;
+                if (sym == SDLK_F1)
+                {
+                    mouseLookEnabled = !mouseLookEnabled;
+                    SDL_SetWindowRelativeMouseMode(programState.window, mouseLookEnabled);
+                }
                 // if (sym == SDLK_SPACE)
                 //     jump here?????
             }
