@@ -28,6 +28,9 @@
 #include "src/metadata.h"
 #include "src/error.h"
 
+#define PI 3.1415926535897932384626433832795f
+#define PI_OVER_2 1.5707963267948966192313216916398f
+
 void PrintMatrix(const DirectX::XMFLOAT4X4 &matrix)
 {
     const float *m = &matrix._11;
@@ -401,7 +404,7 @@ int main(void)
             {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0}};
 
     D3D12_RASTERIZER_DESC rasterizerDesc = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
-    rasterizerDesc.CullMode = D3D12_CULL_MODE_NONE; // Disable culling
+    rasterizerDesc.CullMode = D3D12_CULL_MODE_NONE; // Disable culling (backface culling)
 
     D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
     psoDesc.InputLayout = {inputElementDesc, _countof(inputElementDesc)};
@@ -450,15 +453,15 @@ int main(void)
     };
 
     const float aspectRatio = (float)width / (float)height;
+    float triScale = 20.0f;    
     vertex triangleVertices[] = {
-        {{-1.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
-        {{1.0f, -1.0f, 0.0f}, {1.0f, 1.0f}},
-        {{-1.0f, -1.0f, 0.0f}, {0.0f, 1.0f}},
+        {{-1.0f*triScale, 0.0f, 1.0f*triScale}, {0.0f, 0.0f}},
+        {{1.0f*triScale, 0.0f, -1.0f*triScale}, {1.0f, 1.0f}},
+        {{-1.0f*triScale, 0.0f, -1.0f*triScale}, {0.0f, 1.0f}},
 
-        {{-1.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
-        {{1.0f, 1.0f, 0.0f}, {1.0f, 0.0f}},
-        {{1.0f, -1.0f, 0.0f}, {1.0f, 1.0f}}
-    };
+        {{-1.0f*triScale, 0.0f, 1.0f*triScale}, {0.0f, 0.0f}},
+        {{1.0f*triScale, 0.0f, 1.0f*triScale}, {1.0f, 0.0f}},
+        {{1.0f*triScale, 0.0f, -1.0f*triScale}, {1.0f, 1.0f}}};    
 
     const UINT vertexBufferSize = sizeof(triangleVertices);
 
@@ -538,7 +541,7 @@ int main(void)
     DirectX::TexMetadata metadata;
 
     hr = DirectX::LoadFromDDSFile(
-        L"ground_texture_0.dds",
+        L"gravel.dds",
         DirectX::DDS_FLAGS_NONE,
         &metadata,
         image);
@@ -859,16 +862,61 @@ int main(void)
         {
             movingPoint = -offsetBounds;
         }
+        float angle = movingPoint;
+        float radius = 4.0f;
+
+        static float cameraYaw = 0.0f;
+        static float cameraPitch = 0.0f;
+        float epsilon = 0.0001f;
+
+        // pitch calculations
+        cameraPitch = -movingPoint;
+        cameraPitch = SDL_clamp(cameraPitch, -PI_OVER_2 + epsilon, PI_OVER_2 - epsilon);
+
+        struct v3
+        {
+            float x;
+            float y;
+            float z;
+
+            v3 operator+(const v3 &v) const { return {x + v.x, y + v.y, z + v.z}; }
+            v3 operator-(const v3 &v) const { return {x - v.x, y - v.y, z - v.z}; }
+            v3 operator*(float s) const { return {x * s, y * s, z * s}; }
+
+            static v3 cross(const v3 &a, const v3 &b) { return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x}; }
+
+            static v3 normalised(const v3 &a) {                 
+                float mag = sqrtf(a.x*a.x + a.y*a.y + a.z*a.z);
+                return { a.x/mag, a.y/mag, a.z/mag }; 
+            }
+        };
+
+        v3 worldUp = {0.0f, 1.0f, 0.0f};
+
+        v3 cameraForward = {};
+        cameraForward.x = cosf(cameraPitch) * cosf(cameraYaw);
+        cameraForward.y = sinf(cameraPitch);
+        cameraForward.z = cosf(cameraPitch) * sinf(cameraYaw);
+
+        v3 cameraRight = v3::normalised(v3::cross(cameraForward, worldUp));
+        v3 cameraUp = v3::cross(cameraRight, cameraForward);
+
+        static float forwardSpeed = 0.0f;
+        static float strafeSpeed = 0.0f;        
+
+        static v3 cameraPos = {radius * cosf(0.0f), 4.0f, radius * sinf(0.0f)};
+        cameraPos = cameraPos + (cameraForward * forwardSpeed);
+        cameraPos = cameraPos + (cameraRight * strafeSpeed);
+
+        v3 atPos = cameraPos + cameraForward;
 
         // main matrix update
         // main view and projection matrices setup
         DirectX::XMMATRIX world = DirectX::XMMatrixIdentity();
 
-        float radius = 4.0f;
-        float angle = movingPoint * DirectX::XM_2PI;
-        DirectX::XMVECTOR eye = DirectX::XMVectorSet(radius * cosf(angle), 0.0f, radius * sinf(angle), 0.0f);
-        DirectX::XMVECTOR at = DirectX::XMVectorZero();
-        DirectX::XMVECTOR up = DirectX::XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
+        DirectX::XMVECTOR eye = DirectX::XMVectorSet(cameraPos.x, cameraPos.y, cameraPos.z, 0.0f);
+        DirectX::XMVECTOR at = DirectX::XMVectorSet(atPos.x, atPos.y, atPos.z, 0.0f);
+        DirectX::XMVECTOR up = DirectX::XMVectorSet(cameraUp.x, cameraUp.y, cameraUp.z, 0.0f);
         DirectX::XMMATRIX view = DirectX::XMMatrixLookAtLH(eye, at, up);
         // view = DirectX::XMMatrixIdentity();
 
