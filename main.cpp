@@ -453,15 +453,15 @@ int main(void)
     };
 
     const float aspectRatio = (float)width / (float)height;
-    float triScale = 20.0f;    
+    float triScale = 10.0f;
     vertex triangleVertices[] = {
-        {{-1.0f*triScale, 0.0f, 1.0f*triScale}, {0.0f, 0.0f}},
-        {{1.0f*triScale, 0.0f, -1.0f*triScale}, {1.0f, 1.0f}},
-        {{-1.0f*triScale, 0.0f, -1.0f*triScale}, {0.0f, 1.0f}},
+        {{-1.0f * triScale, 0.0f, 1.0f * triScale}, {0.0f, 0.0f}},
+        {{1.0f * triScale, 0.0f, -1.0f * triScale}, {1.0f, 1.0f}},
+        {{-1.0f * triScale, 0.0f, -1.0f * triScale}, {0.0f, 1.0f}},
 
-        {{-1.0f*triScale, 0.0f, 1.0f*triScale}, {0.0f, 0.0f}},
-        {{1.0f*triScale, 0.0f, 1.0f*triScale}, {1.0f, 0.0f}},
-        {{1.0f*triScale, 0.0f, -1.0f*triScale}, {1.0f, 1.0f}}};    
+        {{-1.0f * triScale, 0.0f, 1.0f * triScale}, {0.0f, 0.0f}},
+        {{1.0f * triScale, 0.0f, 1.0f * triScale}, {1.0f, 0.0f}},
+        {{1.0f * triScale, 0.0f, -1.0f * triScale}, {1.0f, 1.0f}}};
 
     const UINT vertexBufferSize = sizeof(triangleVertices);
 
@@ -804,12 +804,19 @@ int main(void)
         imguiInitialised = true;
     }
 
+    // enable mouse look
+    SDL_SetWindowRelativeMouseMode(programState.window, true);
+    float mouseXrel = 0.0f;
+    float mouseYrel = 0.0f;
+
     uint64_t lastCounter = SDL_GetPerformanceCounter();
     float deltaTime = 0.0f;
     // main program
     programState.isRunning = true;
     while (programState.isRunning)
     {
+        mouseXrel = 0.0f;
+        mouseYrel = 0.0f;
         SDL_Event sdlEvent;
         while (SDL_PollEvent(&sdlEvent))
         {
@@ -819,6 +826,10 @@ int main(void)
             {
             case SDL_EVENT_QUIT:
                 programState.isRunning = false;
+                break;
+            case SDL_EVENT_MOUSE_MOTION:
+                mouseXrel = sdlEvent.motion.xrel;
+                mouseYrel = sdlEvent.motion.yrel;
                 break;
             }
         }
@@ -869,9 +880,13 @@ int main(void)
         static float cameraPitch = 0.0f;
         float epsilon = 0.0001f;
 
+        // static bool enableMouseLook = true;
+
         // pitch calculations
-        cameraPitch = -movingPoint;
+        cameraPitch -= mouseYrel * deltaTime * 0.05f;
         cameraPitch = SDL_clamp(cameraPitch, -PI_OVER_2 + epsilon, PI_OVER_2 - epsilon);
+
+        cameraYaw -= mouseXrel * deltaTime * 0.05f;
 
         struct v3
         {
@@ -885,9 +900,10 @@ int main(void)
 
             static v3 cross(const v3 &a, const v3 &b) { return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x}; }
 
-            static v3 normalised(const v3 &a) {                 
-                float mag = sqrtf(a.x*a.x + a.y*a.y + a.z*a.z);
-                return { a.x/mag, a.y/mag, a.z/mag }; 
+            static v3 normalised(const v3 &a)
+            {
+                float mag = sqrtf(a.x * a.x + a.y * a.y + a.z * a.z);
+                return {a.x / mag, a.y / mag, a.z / mag};
             }
         };
 
@@ -902,7 +918,7 @@ int main(void)
         v3 cameraUp = v3::cross(cameraRight, cameraForward);
 
         static float forwardSpeed = 0.0f;
-        static float strafeSpeed = 0.0f;        
+        static float strafeSpeed = 0.0f;
 
         static v3 cameraPos = {radius * cosf(0.0f), 4.0f, radius * sinf(0.0f)};
         cameraPos = cameraPos + (cameraForward * forwardSpeed);
