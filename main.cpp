@@ -809,6 +809,9 @@ int main(void)
     float mouseXrel = 0.0f;
     float mouseYrel = 0.0f;
 
+    float inputMotionXAxis = 0.0f;
+    float inputMotionYAxis = 0.0f;
+
     uint64_t lastCounter = SDL_GetPerformanceCounter();
     float deltaTime = 0.0f;
     // main program
@@ -831,6 +834,34 @@ int main(void)
                 mouseXrel = sdlEvent.motion.xrel;
                 mouseYrel = sdlEvent.motion.yrel;
                 break;
+            case SDL_EVENT_KEY_DOWN:
+            {
+                SDL_Keycode sym = sdlEvent.key.key;
+                if (sym == SDLK_W)
+                    inputMotionYAxis = 1.0f;
+                if (sym == SDLK_A)
+                    inputMotionXAxis = 1.0f;
+                if (sym == SDLK_S)
+                    inputMotionYAxis = -1.0f;
+                if (sym == SDLK_D)
+                    inputMotionXAxis = -1.0f;
+                // if (sym == SDLK_SPACE)
+                //     jump here?????
+            }
+            break;
+            case SDL_EVENT_KEY_UP:
+            {
+                SDL_Keycode sym = sdlEvent.key.key;
+                if (sym == SDLK_W)
+                    inputMotionYAxis = 0.0f;
+                if (sym == SDLK_A)
+                    inputMotionXAxis = 0.0f;
+                if (sym == SDLK_S)
+                    inputMotionYAxis = 0.0f;
+                if (sym == SDLK_D)
+                    inputMotionXAxis = 0.0f;
+            }
+            break;
             }
         }
         programState.msElapsedSinceSDLInit = SDL_GetTicks();
@@ -918,7 +949,9 @@ int main(void)
         v3 cameraUp = v3::cross(cameraRight, cameraForward);
 
         static float forwardSpeed = 0.0f;
+        forwardSpeed = inputMotionYAxis * deltaTime;
         static float strafeSpeed = 0.0f;
+        strafeSpeed = inputMotionXAxis * deltaTime;
 
         static v3 cameraPos = {radius * cosf(0.0f), 4.0f, radius * sinf(0.0f)};
         cameraPos = cameraPos + (cameraForward * forwardSpeed);
