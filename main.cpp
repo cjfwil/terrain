@@ -31,6 +31,10 @@
 #define PI 3.1415926535897932384626433832795f
 #define PI_OVER_2 1.5707963267948966192313216916398f
 
+inline float randf() {
+    return rand() / (float)RAND_MAX;
+}
+
 void PrintMatrix(const DirectX::XMFLOAT4X4 &matrix)
 {
     const float *m = &matrix._11;
@@ -404,6 +408,7 @@ int main(void)
             {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0}};
 
     D3D12_RASTERIZER_DESC rasterizerDesc = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
+    // rasterizerDesc.FillMode = D3D12_FILL_MODE_WIREFRAME;
     rasterizerDesc.CullMode = D3D12_CULL_MODE_NONE; // Disable culling (backface culling)
 
     D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
@@ -453,15 +458,37 @@ int main(void)
     };
 
     const float aspectRatio = (float)width / (float)height;
-    float triScale = 20.5f; // a value of 0.5f will mean that 1 quad is 1 unit
-    vertex triangleVertices[] = {
-        {{-1.0f * triScale, 0.0f, 1.0f * triScale}, {0.0f, 0.0f}},
-        {{1.0f * triScale, 0.0f, -1.0f * triScale}, {1.0f, 1.0f}},
-        {{-1.0f * triScale, 0.0f, -1.0f * triScale}, {0.0f, 1.0f}},
+    float triScale = 0.5f; // a value of 0.5f will mean that 1 quad is 1 unit
+    vertex quadsVertices[] = {
+        {{-0.5f, 0.0f, 0.5f}, {0.0f, 0.0f}},
+        {{0.5f, 0.0f, -0.5f}, {1.0f, 1.0f}},
+        {{-0.5f, 0.0f, -0.5f}, {0.0f, 1.0f}},
 
-        {{-1.0f * triScale, 0.0f, 1.0f * triScale}, {0.0f, 0.0f}},
-        {{1.0f * triScale, 0.0f, 1.0f * triScale}, {1.0f, 0.0f}},
-        {{1.0f * triScale, 0.0f, -1.0f * triScale}, {1.0f, 1.0f}}};
+        {{-0.5f, 0.0f, 0.5f}, {0.0f, 0.0f}},
+        {{0.5f, 0.0f, 0.5f }, {1.0f, 0.0f}},
+        {{0.5f, 0.0f, -0.5f}, {1.0f, 1.0f}},
+    };
+    const int quadsVerticesNumber = ARRAYSIZE(quadsVertices);
+
+    const int terrainDimInQuads = 16;
+    const int terrainMeshSizeInVertices = (quadsVerticesNumber)*terrainDimInQuads*terrainDimInQuads;
+    vertex triangleVertices[terrainMeshSizeInVertices] = {};
+    for (int i = 0; i < terrainMeshSizeInVertices; i += quadsVerticesNumber)
+    {
+        int currentX = (i/quadsVerticesNumber) % terrainDimInQuads;
+        int currentY = (i/quadsVerticesNumber) / terrainDimInQuads;
+        for (Uint32 j = 0; j < quadsVerticesNumber; j++)
+        {
+            vertex v = quadsVertices[j];
+            v.position.x += (float)currentX;
+            v.position.z += (float)currentY;
+                        
+            // v.position.x *= triScale;
+            v.position.y = randf();
+            // v.position.z *= triScale;
+            triangleVertices[i + j] = v;
+        }
+    }
 
     const UINT vertexBufferSize = sizeof(triangleVertices);
 
@@ -531,7 +558,7 @@ int main(void)
     renderState.bundle->SetGraphicsRootSignature(renderState.rootSignature);
     renderState.bundle->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     renderState.bundle->IASetVertexBuffers(0, 1, &vertexBufferView);
-    renderState.bundle->DrawInstanced(6, 1, 0, 0);
+    renderState.bundle->DrawInstanced(terrainMeshSizeInVertices, 1, 0, 0);
     renderState.bundle->Close();
 
     // ------------------------------------------------------------
@@ -816,8 +843,9 @@ int main(void)
     // gamepad look
     SDL_Gamepad *gamepad = nullptr;
 
-    //input
-    static struct {
+    // input
+    static struct
+    {
         bool w;
         bool a;
         bool s;
@@ -889,7 +917,7 @@ int main(void)
                 {
                     mouseLookEnabled = !mouseLookEnabled;
                     SDL_SetWindowRelativeMouseMode(programState.window, mouseLookEnabled);
-                }                
+                }
             }
             break;
             case SDL_EVENT_KEY_UP:
@@ -971,30 +999,38 @@ int main(void)
         float ry = SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_RIGHTY) / 32767.0f;
         float squareDeadzone = 0.005f;
 
-        if (-squareDeadzone < lx && lx < squareDeadzone) {
+        if (-squareDeadzone < lx && lx < squareDeadzone)
+        {
             lx = 0.0f;
         }
-        if (-squareDeadzone < ly && ly < squareDeadzone) {
+        if (-squareDeadzone < ly && ly < squareDeadzone)
+        {
             ly = 0.0f;
         }
-        if (-squareDeadzone < rx && rx < squareDeadzone) {
+        if (-squareDeadzone < rx && rx < squareDeadzone)
+        {
             rx = 0.0f;
         }
-        if (-squareDeadzone < ry && ry < squareDeadzone) {
+        if (-squareDeadzone < ry && ry < squareDeadzone)
+        {
             ry = 0.0f;
         }
 
         inputMotionXAxis = 0;
         inputMotionYAxis = 0;
         if (gamepad)
-        {                    
+        {
             inputMotionXAxis = -lx;
-            inputMotionYAxis = -ly;               
+            inputMotionYAxis = -ly;
         }
-        if (inputState.w) inputMotionYAxis = 1.0f;
-        if (inputState.s) inputMotionYAxis = -1.0f;
-        if (inputState.a) inputMotionXAxis = 1.0f;
-        if (inputState.d) inputMotionXAxis = -1.0f;
+        if (inputState.w)
+            inputMotionYAxis = 1.0f;
+        if (inputState.s)
+            inputMotionYAxis = -1.0f;
+        if (inputState.a)
+            inputMotionXAxis = 1.0f;
+        if (inputState.d)
+            inputMotionXAxis = -1.0f;
 
         cameraPitch -= mouseYrel * deltaTime * 0.05f; // input from the mouse
         cameraPitch -= ry * deltaTime * 3.5f;
@@ -1112,7 +1148,7 @@ int main(void)
         // non bundle rendering
         // renderState.commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         // renderState.commandList->IASetVertexBuffers(0, 1, &vertexBufferView);
-        // renderState.commandList->DrawInstanced(6, 1, 0, 0);
+        // renderState.commandList->DrawInstanced(terrainMeshSizeInVertices, 1, 0, 0);
 
         // bundle rendering
         renderState.commandList->ExecuteBundle(renderState.bundle);
