@@ -453,7 +453,7 @@ int main(void)
     };
 
     const float aspectRatio = (float)width / (float)height;
-    float triScale = 10.0f;
+    float triScale = 20.5f; // a value of 0.5f will mean that 1 quad is 1 unit
     vertex triangleVertices[] = {
         {{-1.0f * triScale, 0.0f, 1.0f * triScale}, {0.0f, 0.0f}},
         {{1.0f * triScale, 0.0f, -1.0f * triScale}, {1.0f, 1.0f}},
@@ -813,6 +813,17 @@ int main(void)
     float inputMotionXAxis = 0.0f;
     float inputMotionYAxis = 0.0f;
 
+    // gamepad look
+    SDL_Gamepad *gamepad = nullptr;
+
+    //input
+    static struct {
+        bool w;
+        bool a;
+        bool s;
+        bool d;
+    } inputState;
+
     uint64_t lastCounter = SDL_GetPerformanceCounter();
     float deltaTime = 0.0f;
     // main program
@@ -829,8 +840,31 @@ int main(void)
             switch (sdlEvent.type)
             {
             case SDL_EVENT_QUIT:
+            {
                 programState.isRunning = false;
-                break;
+            }
+            break;
+            case SDL_EVENT_GAMEPAD_ADDED:
+            {
+                if (gamepad == nullptr)
+                {
+                    gamepad = SDL_OpenGamepad(sdlEvent.gdevice.which);
+                    if (!gamepad)
+                    {
+                        err("Failed to open gamepad");
+                    }
+                }
+            }
+            break;
+            case SDL_EVENT_GAMEPAD_REMOVED:
+            {
+                if (gamepad && (SDL_GetGamepadID(gamepad) == sdlEvent.gdevice.which))
+                {
+                    SDL_CloseGamepad(gamepad);
+                    gamepad = nullptr;
+                }
+            }
+            break;
             case SDL_EVENT_MOUSE_MOTION:
             {
                 if (mouseLookEnabled)
@@ -844,33 +878,31 @@ int main(void)
             {
                 SDL_Keycode sym = sdlEvent.key.key;
                 if (sym == SDLK_W)
-                    inputMotionYAxis = 1.0f;
+                    inputState.w = true;
                 if (sym == SDLK_A)
-                    inputMotionXAxis = 1.0f;
+                    inputState.a = true;
                 if (sym == SDLK_S)
-                    inputMotionYAxis = -1.0f;
+                    inputState.s = true;
                 if (sym == SDLK_D)
-                    inputMotionXAxis = -1.0f;
+                    inputState.d = true;
                 if (sym == SDLK_F1)
                 {
                     mouseLookEnabled = !mouseLookEnabled;
                     SDL_SetWindowRelativeMouseMode(programState.window, mouseLookEnabled);
-                }
-                // if (sym == SDLK_SPACE)
-                //     jump here?????
+                }                
             }
             break;
             case SDL_EVENT_KEY_UP:
             {
                 SDL_Keycode sym = sdlEvent.key.key;
                 if (sym == SDLK_W)
-                    inputMotionYAxis = 0.0f;
+                    inputState.w = false;
                 if (sym == SDLK_A)
-                    inputMotionXAxis = 0.0f;
+                    inputState.a = false;
                 if (sym == SDLK_S)
-                    inputMotionYAxis = 0.0f;
+                    inputState.s = false;
                 if (sym == SDLK_D)
-                    inputMotionXAxis = 0.0f;
+                    inputState.d = false;
             }
             break;
             }
@@ -895,6 +927,12 @@ int main(void)
             frameRateHistory[frameHistoryIndex] = ImGui::GetIO().Framerate;
             ImGui::PlotLines("Frametime", frameRateHistory, IM_ARRAYSIZE(frameRateHistory), (int)frameHistoryIndex);
             ImGui::Checkbox("VSync", &vsync);
+            if (gamepad)
+            {
+                ImGui::Text("Gamepad Connected");
+                ImGui::Text("Left Stick X: %.3f", inputMotionXAxis);
+                ImGui::Text("Left Stick Y: %.3f", inputMotionYAxis);
+            }
         }
 
         // main loop main body
@@ -923,12 +961,50 @@ int main(void)
         float epsilon = 0.0001f;
 
         // static bool enableMouseLook = true;
+        SDL_UpdateGamepads();
 
         // pitch calculations
-        cameraPitch -= mouseYrel * deltaTime * 0.05f;
+        // input from the controller
+        float lx = SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTX) / 32767.0f;
+        float ly = SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTY) / 32767.0f;
+        float rx = SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_RIGHTX) / 32767.0f;
+        float ry = SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_RIGHTY) / 32767.0f;
+        float squareDeadzone = 0.005f;
+
+        if (-squareDeadzone < lx && lx < squareDeadzone) {
+            lx = 0.0f;
+        }
+        if (-squareDeadzone < ly && ly < squareDeadzone) {
+            ly = 0.0f;
+        }
+        if (-squareDeadzone < rx && rx < squareDeadzone) {
+            rx = 0.0f;
+        }
+        if (-squareDeadzone < ry && ry < squareDeadzone) {
+            ry = 0.0f;
+        }
+
+        inputMotionXAxis = 0;
+        inputMotionYAxis = 0;
+        if (gamepad)
+        {                    
+            inputMotionXAxis = -lx;
+            inputMotionYAxis = -ly;               
+        }
+        if (inputState.w) inputMotionYAxis = 1.0f;
+        if (inputState.s) inputMotionYAxis = -1.0f;
+        if (inputState.a) inputMotionXAxis = 1.0f;
+        if (inputState.d) inputMotionXAxis = -1.0f;
+
+        cameraPitch -= mouseYrel * deltaTime * 0.05f; // input from the mouse
+        cameraPitch -= ry * deltaTime * 3.5f;
+
+        // what should happen when both mouse and joystick input at once?
+
         cameraPitch = SDL_clamp(cameraPitch, -PI_OVER_2 + epsilon, PI_OVER_2 - epsilon);
 
         cameraYaw -= mouseXrel * deltaTime * 0.05f;
+        cameraYaw -= rx * deltaTime * 3.5f;
 
         struct v3
         {
@@ -964,7 +1040,7 @@ int main(void)
         static float strafeSpeed = 0.0f;
         strafeSpeed = inputMotionXAxis * deltaTime;
 
-        static v3 cameraPos = {radius * cosf(0.0f), 4.0f, radius * sinf(0.0f)};
+        static v3 cameraPos = {radius, 4.0f, 0.0f};
         cameraPos = cameraPos + (cameraForward * forwardSpeed);
         cameraPos = cameraPos + (cameraRight * strafeSpeed);
 
@@ -1034,12 +1110,12 @@ int main(void)
         renderState.commandList->ClearRenderTargetView(rtvHandlePerFrame, clearColour, 0, nullptr);
 
         // non bundle rendering
-        renderState.commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        renderState.commandList->IASetVertexBuffers(0, 1, &vertexBufferView);
-        renderState.commandList->DrawInstanced(6, 1, 0, 0);
+        // renderState.commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        // renderState.commandList->IASetVertexBuffers(0, 1, &vertexBufferView);
+        // renderState.commandList->DrawInstanced(6, 1, 0, 0);
 
         // bundle rendering
-        // renderState.commandList->ExecuteBundle(renderState.bundle);
+        renderState.commandList->ExecuteBundle(renderState.bundle);
 
         if (enableImgui)
             ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), renderState.commandList);
@@ -1087,9 +1163,6 @@ int main(void)
         }
         fenceValues[frameIndex] = currentFenceValue + 1;
         // end of moving to next frame
-
-        // ImGui_ImplDX12_NewFrame();
-        // ImGui_ImplSDL3_NewFrame();
 
         programState.ticksElapsed++;
     }
