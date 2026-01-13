@@ -83,15 +83,25 @@ void PrintMatrix(const DirectX::XMFLOAT4X4 &matrix)
     SDL_Log("]\n\n");
 }
 
-float sampleHeightmap(float *heightmap, int dim, float x, float y)
+//float x and float y are in world space
+float sampleHeightmap(float *heightmap, int dim, float worldSpacePosX, float worldSpacePosY)
 {
-    int x0 = (int)x;
-    int y0 = (int)y;
+    // Clamp x ant 
+    if (worldSpacePosX < 0.0f)
+        worldSpacePosX = 0.0f;
+    if (worldSpacePosY < 0.0f)
+        worldSpacePosY = 0.0f;
+    if (worldSpacePosX > (float)dim)
+        worldSpacePosX = (float)dim;
+    if (worldSpacePosY > (float)dim)
+        worldSpacePosY = (float)dim;
+    int x0 = (int)worldSpacePosX;
+    int y0 = (int)worldSpacePosY;
     int x1 = (x0 + 1 < dim) ? x0 + 1 : x0;
     int y1 = (y0 + 1 < dim) ? y0 + 1 : y0;
 
-    float tx = x - (float)x0;
-    float ty = y - (float)y0;
+    float tx = worldSpacePosX - (float)x0;
+    float ty = worldSpacePosY - (float)y0;
 
     // Fetch 4 neighbors
     float h00 = heightmap[y0 * dim + x0];
@@ -527,7 +537,7 @@ int main(void)
 
     D3D12_RASTERIZER_DESC rasterizerDesc = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
     // rasterizerDesc.FillMode = D3D12_FILL_MODE_WIREFRAME;
-    // rasterizerDesc.CullMode = D3D12_CULL_MODE_NONE; // Disable culling (backface culling)
+    rasterizerDesc.CullMode = D3D12_CULL_MODE_NONE; // Disable culling (backface culling)
 
     D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
     psoDesc.InputLayout = {inputElementDesc, _countof(inputElementDesc)};
@@ -599,7 +609,7 @@ int main(void)
     {
         for (int y = 0; y < terrainDimInQuads; y++)
         {
-            heightmap[x + y * terrainDimInQuads] = randf() * 10;
+            heightmap[x + y * terrainDimInQuads] = randf();
         }
     }
 
