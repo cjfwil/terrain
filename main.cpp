@@ -83,6 +83,29 @@ void PrintMatrix(const DirectX::XMFLOAT4X4 &matrix)
     SDL_Log("]\n\n");
 }
 
+float sampleHeightmap(float *heightmap, int dim, float x, float y)
+{
+    int x0 = (int)x;
+    int y0 = (int)y;
+    int x1 = (x0 + 1 < dim) ? x0 + 1 : x0;
+    int y1 = (y0 + 1 < dim) ? y0 + 1 : y0;
+
+    float tx = x - (float)x0;
+    float ty = y - (float)y0;
+
+    // Fetch 4 neighbors
+    float h00 = heightmap[y0 * dim + x0];
+    float h10 = heightmap[y0 * dim + x1];
+    float h01 = heightmap[y1 * dim + x0];
+    float h11 = heightmap[y1 * dim + x1];
+
+    // Bilinear interpolation
+    float hx0 = h00 + (h10 - h00) * tx;
+    float hx1 = h01 + (h11 - h01) * ty;
+
+    return hx0 + (hx1 - hx0) * ty;
+}
+
 // Simple free list based allocator
 struct DescriptorHeapAllocator
 {
@@ -160,6 +183,8 @@ static struct
     static const int frameCount = 3;
     ID3D12CommandAllocator *commandAllocators[frameCount] = {};
     ID3D12Resource *renderTargets[frameCount] = {};
+    ID3D12Resource *depthBuffer = nullptr;
+    ID3D12DescriptorHeap *dsvHeap = nullptr;
     ID3D12CommandAllocator *bundleAllocator = nullptr;
     ID3D12RootSignature *rootSignature = nullptr;
     ID3D12Fence *fence = nullptr;
@@ -361,6 +386,60 @@ int main(void)
         }
     }
 
+    // depth buffer view
+    // ------------------------------
+    // Create depth buffer + DSV heap
+    // ------------------------------
+    D3D12_DESCRIPTOR_HEAP_DESC dsvHeapDesc = {};
+    dsvHeapDesc.NumDescriptors = 1;
+    dsvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
+    dsvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+
+    hr = renderState.device->CreateDescriptorHeap(&dsvHeapDesc, IID_PPV_ARGS(&renderState.dsvHeap));
+    if (FAILED(hr))
+    {
+        errhr("CreateDescriptorHeap failed (dsvHeap)", hr);
+        return 1;
+    }
+
+    D3D12_RESOURCE_DESC depthDesc = {};
+    depthDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    depthDesc.Alignment = 0;
+    depthDesc.Width = width;
+    depthDesc.Height = height;
+    depthDesc.DepthOrArraySize = 1;
+    depthDesc.MipLevels = 1;
+    depthDesc.Format = DXGI_FORMAT_D32_FLOAT;
+    depthDesc.SampleDesc.Count = 1;
+    depthDesc.SampleDesc.Quality = 0;
+    depthDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+    depthDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
+
+    D3D12_CLEAR_VALUE depthClear = {};
+    depthClear.Format = DXGI_FORMAT_D32_FLOAT;
+    depthClear.DepthStencil.Depth = 1.0f;
+    depthClear.DepthStencil.Stencil = 0;
+
+    CD3DX12_HEAP_PROPERTIES heapProps(D3D12_HEAP_TYPE_DEFAULT);
+
+    hr = renderState.device->CreateCommittedResource(
+        &heapProps,
+        D3D12_HEAP_FLAG_NONE,
+        &depthDesc,
+        D3D12_RESOURCE_STATE_DEPTH_WRITE,
+        &depthClear,
+        IID_PPV_ARGS(&renderState.depthBuffer));
+    if (FAILED(hr))
+    {
+        errhr("CreateCommittedResource failed (depthBuffer)", hr);
+        return 1;
+    }
+
+    renderState.device->CreateDepthStencilView(
+        renderState.depthBuffer,
+        nullptr,
+        renderState.dsvHeap->GetCPUDescriptorHandleForHeapStart());
+
     hr = renderState.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_BUNDLE, IID_PPV_ARGS(&renderState.bundleAllocator));
     if (FAILED(hr))
     {
@@ -448,7 +527,7 @@ int main(void)
 
     D3D12_RASTERIZER_DESC rasterizerDesc = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
     // rasterizerDesc.FillMode = D3D12_FILL_MODE_WIREFRAME;
-    rasterizerDesc.CullMode = D3D12_CULL_MODE_NONE; // Disable culling (backface culling)
+    // rasterizerDesc.CullMode = D3D12_CULL_MODE_NONE; // Disable culling (backface culling)
 
     D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
     psoDesc.InputLayout = {inputElementDesc, _countof(inputElementDesc)};
@@ -457,7 +536,10 @@ int main(void)
     psoDesc.PS = CD3DX12_SHADER_BYTECODE(renderState.pixelShader);
     psoDesc.RasterizerState = rasterizerDesc;
     psoDesc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
-    psoDesc.DepthStencilState.DepthEnable = FALSE;
+    psoDesc.DepthStencilState.DepthEnable = TRUE;
+    psoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+    psoDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS;
+    psoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
     psoDesc.DepthStencilState.StencilEnable = FALSE;
     psoDesc.SampleMask = UINT_MAX;
     psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
@@ -507,9 +589,20 @@ int main(void)
         {{0.5f, 0.0f, 0.5f}, {1.0f, 0.0f}},
         {{0.5f, 0.0f, -0.5f}, {1.0f, 1.0f}},
     };
+
     const int quadsVerticesNumber = ARRAYSIZE(quadsVertices);
 
     const int terrainDimInQuads = 64;
+
+    static float heightmap[terrainDimInQuads * terrainDimInQuads] = {};
+    for (int x = 0; x < terrainDimInQuads; x++)
+    {
+        for (int y = 0; y < terrainDimInQuads; y++)
+        {
+            heightmap[x + y * terrainDimInQuads] = randf() * 10;
+        }
+    }
+
     const int terrainMeshSizeInVertices = (quadsVerticesNumber)*terrainDimInQuads * terrainDimInQuads;
     const int terrainMeshBufferSize = terrainMeshSizeInVertices * sizeof(vertex);
     static vertex *triangleVertices = nullptr;
@@ -529,7 +622,8 @@ int main(void)
             v.position.z += (float)currentY;
 
             // v.position.x *= triScale;
-            v.position.y = randf();
+            // v.position.y = heightmap[currentX + currentY * terrainDimInQuads];
+            v.position.y = sampleHeightmap(heightmap, terrainDimInQuads, v.position.x, v.position.z);
             // v.position.z *= triScale;
             triangleVertices[i + j] = v;
         }
@@ -636,6 +730,7 @@ int main(void)
         errhr("CreateCommandList failed", hr);
         return 1;
     }
+
     renderState.bundle->SetGraphicsRootSignature(renderState.rootSignature);
     renderState.bundle->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     renderState.bundle->IASetVertexBuffers(0, 1, &vertexBufferView);
@@ -1104,7 +1199,7 @@ int main(void)
         float angle = movingPoint;
         float radius = 4.0f;
 
-        static float cameraYaw = PI * 2.0f/3.0f;
+        static float cameraYaw = PI * 2.0f / 3.0f;
         static float cameraPitch = 0.0f;
         float epsilon = 0.0001f;
 
@@ -1262,9 +1357,13 @@ int main(void)
         CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandlePerFrame(renderState.rtvHeap->GetCPUDescriptorHandleForHeapStart(), (INT)frameIndex, rtvDescriptorSize);
         renderState.commandList->OMSetRenderTargets(1, &rtvHandlePerFrame, FALSE, nullptr);
 
+        CD3DX12_CPU_DESCRIPTOR_HANDLE dsvHandle(renderState.dsvHeap->GetCPUDescriptorHandleForHeapStart());
+        renderState.commandList->OMSetRenderTargets(1, &rtvHandlePerFrame, FALSE, &dsvHandle);
+
         // commands
         const float clearColour[4] = {0.0f, 0.2f, 0.4f, 1.0f};
         renderState.commandList->ClearRenderTargetView(rtvHandlePerFrame, clearColour, 0, nullptr);
+        renderState.commandList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
 
         // non bundle rendering
         // renderState.commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
