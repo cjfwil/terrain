@@ -5,7 +5,11 @@
 #pragma comment(lib, "d3dcompiler.lib")
 #pragma comment(lib, "dxguid.lib")
 #pragma comment(lib, "imgui.lib")
+#if defined(_DEBUG)
 #pragma comment(lib, "DirectXTex.lib")
+#else
+#pragma comment(lib, "DirectXTex_release.lib")
+#endif
 #pragma comment(lib, "ole32.lib")
 
 #pragma warning(push, 0)
@@ -31,8 +35,41 @@
 #define PI 3.1415926535897932384626433832795f
 #define PI_OVER_2 1.5707963267948966192313216916398f
 
-inline float randf() {
+inline float randf()
+{
     return rand() / (float)RAND_MAX;
+}
+
+static LARGE_INTEGER qpc_freq;
+float qpc_ms(LARGE_INTEGER a, LARGE_INTEGER b)
+{
+    return (float)((b.QuadPart - a.QuadPart) * 1000.0 / (double)qpc_freq.QuadPart);
+}
+
+float findPercentile(float *data, int count, float percentile)
+{
+    // Copy into a temp array (no std::sort)
+    float temp[256];
+    for (int i = 0; i < count; i++)
+        temp[i] = data[i];
+
+    // Simple bubble sort (fast enough for 256 elements)
+    for (int i = 0; i < count - 1; i++)
+        for (int j = 0; j < count - i - 1; j++)
+            if (temp[j] > temp[j + 1])
+            {
+                float t = temp[j];
+                temp[j] = temp[j + 1];
+                temp[j + 1] = t;
+            }
+
+    int index = (int)(percentile * count);
+    if (index < 0)
+        index = 0;
+    if (index >= count)
+        index = count - 1;
+
+    return temp[index];
 }
 
 void PrintMatrix(const DirectX::XMFLOAT4X4 &matrix)
@@ -96,6 +133,7 @@ static struct
     SDL_Window *window;
     Uint64 msElapsedSinceSDLInit;
     uint64_t ticksElapsed = 0;
+    bool fullscreen;
     bool isRunning;
 } programState;
 
@@ -152,7 +190,8 @@ int main(void)
     int width = 1920;
     int height = 1080;
 
-    programState.window = SDL_CreateWindow(APP_WINDOW_TITLE, (int)width, (int)height, SDL_WINDOW_BORDERLESS);
+    SDL_WindowFlags sdlWindowFlags = SDL_WINDOW_FULLSCREEN;
+    programState.window = SDL_CreateWindow(APP_WINDOW_TITLE, (int)width, (int)height, sdlWindowFlags);
     if (!programState.window)
     {
         err("SDL_CreateWindow failed");
@@ -465,38 +504,80 @@ int main(void)
         {{-0.5f, 0.0f, -0.5f}, {0.0f, 1.0f}},
 
         {{-0.5f, 0.0f, 0.5f}, {0.0f, 0.0f}},
-        {{0.5f, 0.0f, 0.5f }, {1.0f, 0.0f}},
+        {{0.5f, 0.0f, 0.5f}, {1.0f, 0.0f}},
         {{0.5f, 0.0f, -0.5f}, {1.0f, 1.0f}},
     };
     const int quadsVerticesNumber = ARRAYSIZE(quadsVertices);
 
-    const int terrainDimInQuads = 16;
-    const int terrainMeshSizeInVertices = (quadsVerticesNumber)*terrainDimInQuads*terrainDimInQuads;
-    vertex triangleVertices[terrainMeshSizeInVertices] = {};
+    const int terrainDimInQuads = 64;
+    const int terrainMeshSizeInVertices = (quadsVerticesNumber)*terrainDimInQuads * terrainDimInQuads;
+    const int terrainMeshBufferSize = terrainMeshSizeInVertices * sizeof(vertex);
+    static vertex *triangleVertices = nullptr;
+    if (!triangleVertices)
+    {
+        triangleVertices = (vertex *)SDL_malloc((size_t)(terrainMeshBufferSize));
+    }
+
     for (int i = 0; i < terrainMeshSizeInVertices; i += quadsVerticesNumber)
     {
-        int currentX = (i/quadsVerticesNumber) % terrainDimInQuads;
-        int currentY = (i/quadsVerticesNumber) / terrainDimInQuads;
+        int currentX = (i / quadsVerticesNumber) % terrainDimInQuads;
+        int currentY = (i / quadsVerticesNumber) / terrainDimInQuads;
         for (Uint32 j = 0; j < quadsVerticesNumber; j++)
         {
             vertex v = quadsVertices[j];
             v.position.x += (float)currentX;
             v.position.z += (float)currentY;
-                        
+
             // v.position.x *= triScale;
             v.position.y = randf();
             // v.position.z *= triScale;
             triangleVertices[i + j] = v;
         }
     }
+    const UINT vertexBufferSize = terrainMeshBufferSize;
 
-    const UINT vertexBufferSize = sizeof(triangleVertices);
+    // create index buffer
+    static Uint32 terrainMeshIndexBufferNum = 3 * (terrainDimInQuads * 2) * terrainDimInQuads;
+    static size_t terrainMeshIndexBufferSize = (size_t)(terrainMeshIndexBufferNum * sizeof(Uint32));
+    static Uint32 *terrainMeshIndexBuffer = (Uint32 *)SDL_malloc(terrainMeshIndexBufferSize);
+
+    for (Uint32 i = 0; i < terrainMeshIndexBufferNum; i++)
+    {
+        terrainMeshIndexBuffer[i] = i; // identity mapping
+    }
+
+    ID3D12Resource *indexBuffer = nullptr;
+    CD3DX12_HEAP_PROPERTIES heapPropsUpload(D3D12_HEAP_TYPE_UPLOAD);
+    CD3DX12_RESOURCE_DESC indexBufferDesc = CD3DX12_RESOURCE_DESC::Buffer(terrainMeshIndexBufferSize);
+    hr = renderState.device->CreateCommittedResource(
+        &heapPropsUpload,
+        D3D12_HEAP_FLAG_NONE,
+        &indexBufferDesc,
+        D3D12_RESOURCE_STATE_GENERIC_READ,
+        nullptr,
+        IID_PPV_ARGS(&indexBuffer));
+    if (FAILED(hr))
+    {
+        errhr("CreateCommittedResource failed", hr);
+        return 1;
+    }
+
+    Uint32 *gpuIndexData = nullptr;
+
+    CD3DX12_RANGE readRangeIndexBuffer(0, 0); // we do not intend to read from this resource
+    indexBuffer->Map(0, &readRangeIndexBuffer, (void **)&gpuIndexData);
+    memcpy(gpuIndexData, terrainMeshIndexBuffer, terrainMeshIndexBufferSize);
+    indexBuffer->Unmap(0, nullptr);
+
+    D3D12_INDEX_BUFFER_VIEW indexBufferView = {};
+    indexBufferView.BufferLocation = indexBuffer->GetGPUVirtualAddress();
+    indexBufferView.SizeInBytes = (UINT)terrainMeshIndexBufferSize;
+    indexBufferView.Format = DXGI_FORMAT_R32_UINT;
 
     // create constant buffer
     const UINT constantBufferSize = 256U;
     static UINT *CbvDataBegin = nullptr;
 
-    CD3DX12_HEAP_PROPERTIES heapPropsUpload(D3D12_HEAP_TYPE_UPLOAD);
     CD3DX12_RESOURCE_DESC constantBufferDesc = CD3DX12_RESOURCE_DESC::Buffer(constantBufferSize);
     hr = renderState.device->CreateCommittedResource(
         &heapPropsUpload,
@@ -540,7 +621,7 @@ int main(void)
         errhr("Map failed (vertex buffer)", hr);
         return 1;
     }
-    memcpy(vertexDataBegin, triangleVertices, sizeof(triangleVertices));
+    memcpy(vertexDataBegin, triangleVertices, terrainMeshBufferSize);
     renderState.vertexBuffer->Unmap(0, nullptr);
 
     D3D12_VERTEX_BUFFER_VIEW vertexBufferView = {};
@@ -558,7 +639,10 @@ int main(void)
     renderState.bundle->SetGraphicsRootSignature(renderState.rootSignature);
     renderState.bundle->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     renderState.bundle->IASetVertexBuffers(0, 1, &vertexBufferView);
-    renderState.bundle->DrawInstanced(terrainMeshSizeInVertices, 1, 0, 0);
+    renderState.bundle->IASetIndexBuffer(&indexBufferView);
+    renderState.bundle->DrawIndexedInstanced(terrainMeshIndexBufferNum, 1, 0, 0, 0);
+
+    // renderState.bundle->DrawInstanced(terrainMeshSizeInVertices, 1, 0, 0);
     renderState.bundle->Close();
 
     // ------------------------------------------------------------
@@ -855,9 +939,18 @@ int main(void)
     uint64_t lastCounter = SDL_GetPerformanceCounter();
     float deltaTime = 0.0f;
     // main program
+    static LARGE_INTEGER t0, t1, t2, t3 = {};
+    QueryPerformanceFrequency(&qpc_freq);
+
     programState.isRunning = true;
     while (programState.isRunning)
     {
+        float update_ms = qpc_ms(t0, t1);
+        float render_ms = qpc_ms(t1, t2);
+        float present_ms = qpc_ms(t2, t3);
+        float frame_ms = qpc_ms(t0, t3);
+        QueryPerformanceCounter(&t0);
+
         mouseXrel = 0.0f;
         mouseYrel = 0.0f;
         SDL_Event sdlEvent;
@@ -945,7 +1038,7 @@ int main(void)
             static bool show_demo_window = false;
             if (show_demo_window)
                 ImGui::ShowDemoWindow(&show_demo_window);
-            ImGui::Text("Application average %.3f ms/frame (%.1f FPS)",
+            ImGui::Text("Application average %.3f ms/frame (%.2f FPS)",
                         1000.0f / ImGui::GetIO().Framerate,
                         ImGui::GetIO().Framerate);
 
@@ -954,12 +1047,39 @@ int main(void)
             uint64_t frameHistoryIndex = programState.ticksElapsed % 256;
             frameRateHistory[frameHistoryIndex] = ImGui::GetIO().Framerate;
             ImGui::PlotLines("Frametime", frameRateHistory, IM_ARRAYSIZE(frameRateHistory), (int)frameHistoryIndex);
+
+            int count = 256;
+
+            // FPS values
+            float fps_1pct_low = findPercentile(frameRateHistory, count, 0.01f);
+            float fps_01pct_low = findPercentile(frameRateHistory, count, 0.001f);
+            float fps_peak = findPercentile(frameRateHistory, count, 0.999f);
+            float fps_min = findPercentile(frameRateHistory, count, 0.0f);
+            float fps_max = findPercentile(frameRateHistory, count, 1.0f);
+
+            ImGui::Text("1%% Low:  %.2f FPS", fps_1pct_low);
+            ImGui::Text("0.1%% Low:%.2f FPS", fps_01pct_low);
+            ImGui::Text("Peak:    %.2f FPS", fps_peak);
+            ImGui::Text("Min:     %.2f FPS", fps_min);
+            ImGui::Text("Max:     %.2f FPS", fps_max);
+
+            ImGui::Text("Update:  %.3f ms", update_ms);
+            ImGui::Text("Render:  %.3f ms", render_ms);
+            ImGui::Text("Present: %.3f ms", present_ms);
+            ImGui::Text("Frame:   %.3f ms", frame_ms);
+
+            ImGui::Text("Triangles rendered: :%d", terrainMeshSizeInVertices / 3);
+
             ImGui::Checkbox("VSync", &vsync);
             if (gamepad)
             {
                 ImGui::Text("Gamepad Connected");
                 ImGui::Text("Left Stick X: %.3f", inputMotionXAxis);
                 ImGui::Text("Left Stick Y: %.3f", inputMotionYAxis);
+            }
+            if (ImGui::Button("Quit"))
+            {
+                programState.isRunning = false;
             }
         }
 
@@ -984,7 +1104,7 @@ int main(void)
         float angle = movingPoint;
         float radius = 4.0f;
 
-        static float cameraYaw = 0.0f;
+        static float cameraYaw = PI * 2.0f/3.0f;
         static float cameraPitch = 0.0f;
         float epsilon = 0.0001f;
 
@@ -1076,13 +1196,14 @@ int main(void)
         static float strafeSpeed = 0.0f;
         strafeSpeed = inputMotionXAxis * deltaTime;
 
-        static v3 cameraPos = {radius, 4.0f, 0.0f};
+        static v3 cameraPos = {radius, 2.0f, 0.0f};
         cameraPos = cameraPos + (cameraForward * forwardSpeed);
         cameraPos = cameraPos + (cameraRight * strafeSpeed);
 
-        v3 atPos = cameraPos + cameraForward;
+        QueryPerformanceCounter(&t1);
 
         // main matrix update
+        v3 atPos = cameraPos + cameraForward;
         // main view and projection matrices setup
         DirectX::XMMATRIX world = DirectX::XMMatrixIdentity();
 
@@ -1147,8 +1268,10 @@ int main(void)
 
         // non bundle rendering
         // renderState.commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        // renderState.commandList->IASetVertexBuffers(0, 1, &vertexBufferView);
-        // renderState.commandList->DrawInstanced(terrainMeshSizeInVertices, 1, 0, 0);
+        // // renderState.commandList->IASetVertexBuffers(0, 1, &vertexBufferView);
+        // // renderState.commandList->DrawInstanced(terrainMeshSizeInVertices, 1, 0, 0);
+        // renderState.commandList->IASetIndexBuffer(&indexBufferView);
+        // renderState.commandList->DrawIndexedInstanced(terrainMeshIndexBufferNum, 1, 0, 0, 0);
 
         // bundle rendering
         renderState.commandList->ExecuteBundle(renderState.bundle);
@@ -1169,6 +1292,8 @@ int main(void)
         // execute command list
         ID3D12CommandList *commandListsPerFrame[] = {renderState.commandList};
         renderState.commandQueue->ExecuteCommandLists(_countof(commandListsPerFrame), commandListsPerFrame);
+
+        QueryPerformanceCounter(&t2);
 
         hr = renderState.swapChain->Present((vsync) ? 1 : 0, (vsync) ? 0 : DXGI_PRESENT_ALLOW_TEARING);
         if (FAILED(hr))
@@ -1201,7 +1326,11 @@ int main(void)
         // end of moving to next frame
 
         programState.ticksElapsed++;
+
+        QueryPerformanceCounter(&t3);
     }
+    // SDL_SetWindowBordered(programState.window, true);
+    SDL_SyncWindow(programState.window);
     SDL_DestroyWindow(programState.window);
     SDL_Quit();
 

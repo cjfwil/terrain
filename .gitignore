@@ -2,3 +2,7 @@
 *.obj
 *.pdb
 *.exe
+
+/release/
+
+link_verbose.txt
