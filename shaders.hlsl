@@ -26,15 +26,18 @@ VSOut VSMain(float3 position : POSITION, float2 uv : TEXCOORD)
     return o;
 }
 
-float3 FaceNormalFromDeriv(float3 p)
+float3 SmoothNormal(float3 worldPos)
 {
-    float3 dx = ddx(p);
-    float3 dy = ddy(p);
+    float3 dx = ddx(worldPos);
+    float3 dy = ddy(worldPos);
+
     float3 n = cross(dx, dy);
-    float len = length(n);
-    if (len < 1e-6f) return float3(0.0f, 1.0f, 0.0f); // fallback
-    return n / len;
+    
+    if (n.y < 0) n = -n;
+
+    return normalize(n);
 }
+
 
 float4 PSMain(VSOut IN) : SV_Target
 {
@@ -44,12 +47,11 @@ float4 PSMain(VSOut IN) : SV_Target
     const float ambient = 0.2f;
 
     float4 albedo = g_texture.Sample(g_sampler, IN.uv);
-
-    // flat (per-triangle) normal computed from interpolated world position
-    float3 N = FaceNormalFromDeriv(IN.worldPos);
+    
+    float3 N = SmoothNormal(IN.worldPos);
 
     // Lambert diffuse
-    float diff = saturate(dot(N, -lightDir)); // -lightDir so positive when normal faces light
+    float diff = saturate(dot(N, -lightDir));
     float3 lit = albedo.rgb * (ambient + diff * 0.8f) * lightColor;
 
     return float4(lit, albedo.a);

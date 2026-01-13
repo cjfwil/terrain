@@ -609,7 +609,7 @@ int main(void)
     {
         for (int y = 0; y < terrainDimInQuads; y++)
         {
-            heightmap[x + y * terrainDimInQuads] = randf();
+            heightmap[x + y * terrainDimInQuads] = sinf(x * 0.1f) * cosf(y * 0.1f) * 5.0f;
         }
     }
 
