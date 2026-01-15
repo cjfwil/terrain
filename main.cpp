@@ -1,5 +1,6 @@
 #pragma warning(disable : 5045) // disabling the spectre mitigation warning (not relevant because we are a game, no sensitive information should be in this program)
 #pragma comment(lib, "SDL3.lib")
+#pragma comment(lib, "SDL3_image.lib")
 #pragma comment(lib, "d3d12.lib")
 #pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "d3dcompiler.lib")
@@ -27,6 +28,7 @@
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_thread.h>
+#include <SDL3_image/SDL_image.h>
 #pragma warning(pop)
 
 #include "src/metadata.h"
@@ -34,6 +36,25 @@
 
 #define PI 3.1415926535897932384626433832795f
 #define PI_OVER_2 1.5707963267948966192313216916398f
+
+struct v3
+{
+    float x;
+    float y;
+    float z;
+
+    v3 operator+(const v3 &v) const { return {x + v.x, y + v.y, z + v.z}; }
+    v3 operator-(const v3 &v) const { return {x - v.x, y - v.y, z - v.z}; }
+    v3 operator*(float s) const { return {x * s, y * s, z * s}; }
+
+    static v3 cross(const v3 &a, const v3 &b) { return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x}; }
+
+    static v3 normalised(const v3 &a)
+    {
+        float mag = sqrtf(a.x * a.x + a.y * a.y + a.z * a.z);
+        return {a.x / mag, a.y / mag, a.z / mag};
+    }
+};
 
 inline float randf()
 {
@@ -83,25 +104,23 @@ void PrintMatrix(const DirectX::XMFLOAT4X4 &matrix)
     SDL_Log("]\n\n");
 }
 
-//float x and float y are in world space
-float sampleHeightmap(float *heightmap, int dim, float worldSpacePosX, float worldSpacePosY)
+// float x and float y are in world space
+float sampleHeightmap(float *heightmap, int dim, float _worldSpacePosX, float _worldSpacePosY, float quadSize, float terrainDimQuads)
 {
-    // Clamp x ant 
-    if (worldSpacePosX < 0.0f)
-        worldSpacePosX = 0.0f;
-    if (worldSpacePosY < 0.0f)
-        worldSpacePosY = 0.0f;
-    if (worldSpacePosX > (float)dim)
-        worldSpacePosX = (float)dim;
-    if (worldSpacePosY > (float)dim)
-        worldSpacePosY = (float)dim;
-    int x0 = (int)worldSpacePosX;
-    int y0 = (int)worldSpacePosY;
+    // convert to [0, 1]
+    float x = _worldSpacePosX / terrainDimQuads;
+    float y = _worldSpacePosY / terrainDimQuads;
+
+    x *= dim;
+    y *= dim;
+
+    int x0 = (int)(x / quadSize);
+    int y0 = (int)(y / quadSize);
     int x1 = (x0 + 1 < dim) ? x0 + 1 : x0;
     int y1 = (y0 + 1 < dim) ? y0 + 1 : y0;
 
-    float tx = worldSpacePosX - (float)x0;
-    float ty = worldSpacePosY - (float)y0;
+    float tx = x - (float)x0;
+    float ty = y - (float)y0;
 
     // Fetch 4 neighbors
     float h00 = heightmap[y0 * dim + x0];
@@ -533,11 +552,12 @@ int main(void)
     D3D12_INPUT_ELEMENT_DESC inputElementDesc[] =
         {
             {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
-            {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0}};
+            {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+            {"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 20, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0}};
 
     D3D12_RASTERIZER_DESC rasterizerDesc = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
-    // rasterizerDesc.FillMode = D3D12_FILL_MODE_WIREFRAME;
-    rasterizerDesc.CullMode = D3D12_CULL_MODE_NONE; // Disable culling (backface culling)
+    rasterizerDesc.FillMode = D3D12_FILL_MODE_WIREFRAME;
+    // rasterizerDesc.CullMode = D3D12_CULL_MODE_NONE; // Disable culling (backface culling)
 
     D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
     psoDesc.InputLayout = {inputElementDesc, _countof(inputElementDesc)};
@@ -586,30 +606,102 @@ int main(void)
     {
         DirectX::XMFLOAT3 position;
         DirectX::XMFLOAT2 texCoords;
+        DirectX::XMFLOAT3 normals;
     };
 
     const float aspectRatio = (float)width / (float)height;
     float triScale = 0.5f; // a value of 0.5f will mean that 1 quad is 1 unit
+    float tsX = 0.5f;
     vertex quadsVertices[] = {
-        {{-0.5f, 0.0f, 0.5f}, {0.0f, 0.0f}},
-        {{0.5f, 0.0f, -0.5f}, {1.0f, 1.0f}},
-        {{-0.5f, 0.0f, -0.5f}, {0.0f, 1.0f}},
+        // {{-tsX, 0.0f, tsX}, {0.0f, 0.0f}},
+        // {{tsX, 0.0f, -tsX}, {1.0f, 1.0f}},
+        // {{-tsX, 0.0f, -tsX}, {0.0f, 1.0f}},
 
-        {{-0.5f, 0.0f, 0.5f}, {0.0f, 0.0f}},
-        {{0.5f, 0.0f, 0.5f}, {1.0f, 0.0f}},
-        {{0.5f, 0.0f, -0.5f}, {1.0f, 1.0f}},
+        // {{-tsX, 0.0f, tsX}, {0.0f, 0.0f}},
+        // {{tsX, 0.0f, tsX}, {1.0f, 0.0f}},
+        // {{tsX, 0.0f, -tsX}, {1.0f, 1.0f}},
+
+        // {{-tsX, 0.0f, -tsX}, {0.0f, 0.0f}},
+        // {{0.0f, 0.0f, 0.0f}, {0.5f, 0.5f}},
+        // {{tsX, 0.0f, -tsX}, {1.0f, 0.0f}},
+
+        // {{-tsX, 0.0f, tsX}, {0.0f, 1.0f}},
+        // {{0.0f, 0.0f, 0.0f}, {0.5f, 0.5f}},
+        // {{-tsX, 0.0f, -tsX}, {0.0f, 0.0f}},
+
+        // {{-tsX, 0.0f, tsX}, {0.0f, 1.0f}},
+        // {{tsX, 0.0f, tsX}, {1.0f, 1.0f}},
+        // {{0.0f, 0.0f, 0.0f}, {0.5f, 0.5f}},
+
+        // {{tsX, 0.0f, tsX}, {1.0f, 1.0f}},
+        // {{tsX, 0.0f, -tsX}, {1.0f, 0.0f}},
+        // {{0.0f, 0.0f, 0.0f}, {0.5f, 0.5f}},
+
+        {{-tsX, 0, 0}, {0.0f, 0.5f}},
+        {{0, 0, 0}, {0.5f, 0.5f}},
+        {{-tsX, 0, -tsX}, {0.0f, 0.0f}},
+
+        {{-tsX, 0, -tsX}, {0.0f, 0.0f}},
+        {{0, 0, 0}, {0.5f, 0.5f}},
+        {{0, 0, -tsX}, {0.5f, 0.0f}},
+
+        {{0, 0, -tsX}, {0.5f, 0.0f}},
+        {{0, 0, 0}, {0.5f, 0.5f}},
+        {{tsX, 0, -tsX}, {1.0f, 0.0f}},
+
+        {{0, 0, 0}, {0.5f, 0.5f}},
+        {{tsX, 0, 0}, {1.0f, 0.5f}},
+        {{tsX, 0, -tsX}, {1.0f, 0.0f}},
+
+        {{-tsX, 0, tsX}, {0.0f, 1.0f}},
+        {{0, 0, 0}, {0.5f, 0.5f}},
+        {{-tsX, 0, 0}, {0.0f, 0.5f}},
+
+        {{-tsX, 0, tsX}, {0.0f, 1.0f}},
+        {{0, 0, tsX}, {0.5f, 1.0f}},
+        {{0, 0, 0}, {0.5f, 0.5f}},
+
+        {{0, 0, tsX}, {0.5f, 1.0f}},
+        {{tsX, 0, tsX}, {1.0f, 1.0f}},
+        {{0, 0, 0}, {0.5f, 0.5f}},
+
+        {{tsX, 0, tsX}, {1.0f, 1.0f}},
+        {{tsX, 0, 0}, {1.0f, 0.5f}},
+        {{0, 0, 0}, {0.5f, 0.5f}},
     };
+
+    float quadSize = 1.0f;
 
     const int quadsVerticesNumber = ARRAYSIZE(quadsVertices);
 
-    const int terrainDimInQuads = 64;
-
-    static float heightmap[terrainDimInQuads * terrainDimInQuads] = {};
-    for (int x = 0; x < terrainDimInQuads; x++)
+    SDL_Surface *img = IMG_Load("heightmap.png");
+    if (!img)
     {
-        for (int y = 0; y < terrainDimInQuads; y++)
+        err("IMG_Load failed");
+        return 1;
+    }
+    SDL_Log("Format: %s", SDL_GetPixelFormatName(img->format));
+    SDL_Log("Pitch: %d", img->pitch);
+
+    Uint32 *img_pixels = (Uint32 *)img->pixels;
+
+    int img_w = img->w;
+    int img_h = img->h;
+    int terrainDimInQuads = img_w-1;
+    static float *heightmap = (float *)SDL_malloc((size_t)(img_w * img_h * sizeof(float)));
+    for (int x = 0; x < img_w; x++)
+    {
+        for (int y = 0; y < img_h; y++)
         {
-            heightmap[x + y * terrainDimInQuads] = sinf(x * 0.1f) * cosf(y * 0.1f) * 5.0f;
+            Uint32 index = img_pixels[y * img_w + x];
+
+            Uint8 actualColour = (index) & 0xFF; // for grayscale, r == g == b
+
+            float heightScale = (float)terrainDimInQuads / 10.0f;
+            heightScale *= 10.0f;
+            // float heightScale = 0.0f;
+            float h = (actualColour / 255.0f) * heightScale;
+            heightmap[x + y * img_w] = h;
         }
     }
 
@@ -625,23 +717,43 @@ int main(void)
     {
         int currentX = (i / quadsVerticesNumber) % terrainDimInQuads;
         int currentY = (i / quadsVerticesNumber) / terrainDimInQuads;
+
         for (Uint32 j = 0; j < quadsVerticesNumber; j++)
         {
             vertex v = quadsVertices[j];
-            v.position.x += (float)currentX;
-            v.position.z += (float)currentY;
 
-            // v.position.x *= triScale;
-            // v.position.y = heightmap[currentX + currentY * terrainDimInQuads];
-            v.position.y = sampleHeightmap(heightmap, terrainDimInQuads, v.position.x, v.position.z);
-            // v.position.z *= triScale;
+            v.position.x += (float)currentX * quadSize;
+            v.position.z += (float)currentY * quadSize;
+            v.position.y = sampleHeightmap(heightmap, img_w,
+                                           v.position.x, v.position.z,
+                                           quadSize, (float)terrainDimInQuads);
+
+            // --- Compute geometric normal using heightmap sampling ---
+            float x = v.position.x;
+            float z = v.position.z;
+
+            float hL = sampleHeightmap(heightmap, img_w, x - 1.0f, z, quadSize, (float)terrainDimInQuads);
+            float hR = sampleHeightmap(heightmap, img_w, x + 1.0f, z, quadSize, (float)terrainDimInQuads);
+            float hD = sampleHeightmap(heightmap, img_w, x, z - 1.0f, quadSize, (float)terrainDimInQuads);
+            float hU = sampleHeightmap(heightmap, img_w, x, z + 1.0f, quadSize, (float)terrainDimInQuads);
+
+            v3 e1 = {2.0f, hR - hL, 0.0f}; // X direction
+            v3 e2 = {0.0f, hU - hD, 2.0f}; // Z direction
+
+            v3 normal = v3::normalised(v3::cross(e2, e1));
+
+            v.normals.x = normal.x;
+            v.normals.y = normal.y;
+            v.normals.z = normal.z;
+
             triangleVertices[i + j] = v;
         }
     }
+
     const UINT vertexBufferSize = terrainMeshBufferSize;
 
     // create index buffer
-    static Uint32 terrainMeshIndexBufferNum = 3 * (terrainDimInQuads * 2) * terrainDimInQuads;
+    static Uint32 terrainMeshIndexBufferNum = 3 * (terrainDimInQuads * (sizeof(quadsVertices) / quadsVerticesNumber)) * terrainDimInQuads;
     static size_t terrainMeshIndexBufferSize = (size_t)(terrainMeshIndexBufferNum * sizeof(Uint32));
     static Uint32 *terrainMeshIndexBuffer = (Uint32 *)SDL_malloc(terrainMeshIndexBufferSize);
 
@@ -1173,7 +1285,7 @@ int main(void)
             ImGui::Text("Present: %.3f ms", present_ms);
             ImGui::Text("Frame:   %.3f ms", frame_ms);
 
-            ImGui::Text("Triangles rendered: :%d", terrainMeshSizeInVertices / 3);
+            ImGui::Text("Vertices:%d", terrainMeshSizeInVertices);
 
             ImGui::Checkbox("VSync", &vsync);
             if (gamepad)
@@ -1209,7 +1321,7 @@ int main(void)
         float angle = movingPoint;
         float radius = 4.0f;
 
-        static float cameraYaw = PI * 2.0f / 3.0f;
+        static float cameraYaw = PI * 2.26f / 3.0f;
         static float cameraPitch = 0.0f;
         float epsilon = 0.0001f;
 
@@ -1267,25 +1379,6 @@ int main(void)
         cameraYaw -= mouseXrel * deltaTime * 0.05f;
         cameraYaw -= rx * deltaTime * 3.5f;
 
-        struct v3
-        {
-            float x;
-            float y;
-            float z;
-
-            v3 operator+(const v3 &v) const { return {x + v.x, y + v.y, z + v.z}; }
-            v3 operator-(const v3 &v) const { return {x - v.x, y - v.y, z - v.z}; }
-            v3 operator*(float s) const { return {x * s, y * s, z * s}; }
-
-            static v3 cross(const v3 &a, const v3 &b) { return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x}; }
-
-            static v3 normalised(const v3 &a)
-            {
-                float mag = sqrtf(a.x * a.x + a.y * a.y + a.z * a.z);
-                return {a.x / mag, a.y / mag, a.z / mag};
-            }
-        };
-
         v3 worldUp = {0.0f, 1.0f, 0.0f};
 
         v3 cameraForward = {};
@@ -1297,11 +1390,12 @@ int main(void)
         v3 cameraUp = v3::cross(cameraRight, cameraForward);
 
         static float forwardSpeed = 0.0f;
-        forwardSpeed = inputMotionYAxis * deltaTime;
+        static float boostSpeed = 50.0f;
+        forwardSpeed = inputMotionYAxis * deltaTime * boostSpeed;
         static float strafeSpeed = 0.0f;
-        strafeSpeed = inputMotionXAxis * deltaTime;
+        strafeSpeed = inputMotionXAxis * deltaTime * boostSpeed;
 
-        static v3 cameraPos = {radius, 2.0f, 0.0f};
+        static v3 cameraPos = {(float)terrainDimInQuads, 60.0f, 0.0f};
         cameraPos = cameraPos + (cameraForward * forwardSpeed);
         cameraPos = cameraPos + (cameraRight * strafeSpeed);
 
@@ -1320,7 +1414,7 @@ int main(void)
 
         float fov = DirectX::XMConvertToRadians(60.0f);
         float nearZ = 0.1f;
-        float farZ = 100.0f;
+        float farZ = 2000.0f;
         DirectX::XMMATRIX projection = DirectX::XMMatrixPerspectiveFovLH(fov, aspectRatio, nearZ, farZ);
         // DirectX::XMMATRIX projection = DirectX::XMMatrixOrthographicLH(2.0f, 2.0f, 0.1f, 100.0f);
 
@@ -1438,67 +1532,67 @@ int main(void)
 
         QueryPerformanceCounter(&t3);
     }
-    // SDL_SetWindowBordered(programState.window, true);
-    SDL_SyncWindow(programState.window);
-    SDL_DestroyWindow(programState.window);
-    SDL_Quit();
+    // // SDL_SetWindowBordered(programState.window, true);
+    // SDL_SyncWindow(programState.window);
+    // SDL_DestroyWindow(programState.window);
+    // SDL_Quit();
 
-    // cleanup
-    if (imguiInitialised)
-    {
-        ImGui_ImplDX12_Shutdown();
-        ImGui_ImplSDL3_Shutdown();
-        ImGui::DestroyContext();
-    }
+    // // cleanup
+    // if (imguiInitialised)
+    // {
+    //     ImGui_ImplDX12_Shutdown();
+    //     ImGui_ImplSDL3_Shutdown();
+    //     ImGui::DestroyContext();
+    // }
 
-    if (fenceEvent)
-        CloseHandle(fenceEvent);
-    if (renderState.fence)
-        renderState.fence->Release();
-    if (renderState.texture)
-        renderState.texture->Release();
-    if (textureUploadHeap)
-        textureUploadHeap->Release();
-    if (renderState.vertexBuffer)
-        renderState.vertexBuffer->Release();
-    if (renderState.constantBuffer)
-        renderState.constantBuffer->Release();
-    if (renderState.bundle)
-        renderState.bundle->Release();
-    if (renderState.commandList)
-        renderState.commandList->Release();
-    if (renderState.pipelineState)
-        renderState.pipelineState->Release();
-    if (renderState.rootSignature)
-        renderState.rootSignature->Release();
-    if (renderState.srvHeap)
-        renderState.srvHeap->Release();
-    if (renderState.rtvHeap)
-        renderState.rtvHeap->Release();
-    for (UINT i = 0; i < renderState.frameCount; ++i)
-    {
-        if (renderState.renderTargets[i])
-            renderState.renderTargets[i]->Release();
-        if (renderState.commandAllocators[i])
-            renderState.commandAllocators[i]->Release();
-    }
-    if (renderState.swapChain)
-        renderState.swapChain->Release();
-    if (renderState.commandQueue)
-        renderState.commandQueue->Release();
-    if (renderState.bundleAllocator)
-        renderState.bundleAllocator->Release();
-    if (renderState.device)
-        renderState.device->Release();
-    if (renderState.hardwareAdapter)
-        renderState.hardwareAdapter->Release();
-    if (renderState.factory)
-        renderState.factory->Release();
-    if (renderState.vertexShader)
-        renderState.vertexShader->Release();
-    if (renderState.pixelShader)
-        renderState.pixelShader->Release();
-    if (signature)
-        signature->Release();
+    // if (fenceEvent)
+    //     CloseHandle(fenceEvent);
+    // if (renderState.fence)
+    //     renderState.fence->Release();
+    // if (renderState.texture)
+    //     renderState.texture->Release();
+    // if (textureUploadHeap)
+    //     textureUploadHeap->Release();
+    // if (renderState.vertexBuffer)
+    //     renderState.vertexBuffer->Release();
+    // if (renderState.constantBuffer)
+    //     renderState.constantBuffer->Release();
+    // if (renderState.bundle)
+    //     renderState.bundle->Release();
+    // if (renderState.commandList)
+    //     renderState.commandList->Release();
+    // if (renderState.pipelineState)
+    //     renderState.pipelineState->Release();
+    // if (renderState.rootSignature)
+    //     renderState.rootSignature->Release();
+    // if (renderState.srvHeap)
+    //     renderState.srvHeap->Release();
+    // if (renderState.rtvHeap)
+    //     renderState.rtvHeap->Release();
+    // for (UINT i = 0; i < renderState.frameCount; ++i)
+    // {
+    //     if (renderState.renderTargets[i])
+    //         renderState.renderTargets[i]->Release();
+    //     if (renderState.commandAllocators[i])
+    //         renderState.commandAllocators[i]->Release();
+    // }
+    // if (renderState.swapChain)
+    //     renderState.swapChain->Release();
+    // if (renderState.commandQueue)
+    //     renderState.commandQueue->Release();
+    // if (renderState.bundleAllocator)
+    //     renderState.bundleAllocator->Release();
+    // if (renderState.device)
+    //     renderState.device->Release();
+    // if (renderState.hardwareAdapter)
+    //     renderState.hardwareAdapter->Release();
+    // if (renderState.factory)
+    //     renderState.factory->Release();
+    // if (renderState.vertexShader)
+    //     renderState.vertexShader->Release();
+    // if (renderState.pixelShader)
+    //     renderState.pixelShader->Release();
+    // if (signature)
+    //     signature->Release();
     return (0);
 }

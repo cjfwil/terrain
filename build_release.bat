@@ -25,6 +25,7 @@ if errorlevel 1 (
 :: Copy runtime assets
 if exist "shaders.hlsl" copy /Y "shaders.hlsl" "%OUTDIR%\"
 if exist "gravel.dds" copy /Y "gravel.dds" "%OUTDIR%\"
+if exist "heightmap.png" copy /Y "heightmap.png" "%OUTDIR%\"
 
 :: Copy SDL runtime DLLs from System32
 if exist "%WINDIR%\System32\SDL3.dll" copy /Y "%WINDIR%\System32\SDL3.dll" "%OUTDIR%\"
