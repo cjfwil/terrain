@@ -29,10 +29,14 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_thread.h>
 #include <SDL3_image/SDL_image.h>
+
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb_image.h"
 #pragma warning(pop)
 
 #include "src/metadata.h"
 #include "src/error.h"
+#include "src/profiling.h"
 
 #define PI 3.1415926535897932384626433832795f
 #define PI_OVER_2 1.5707963267948966192313216916398f
@@ -56,41 +60,16 @@ struct v3
     }
 };
 
+struct vertex
+{
+    DirectX::XMFLOAT3 position;
+    DirectX::XMFLOAT2 texCoords;
+    DirectX::XMFLOAT3 normals;
+};
+
 inline float randf()
 {
-    return rand() / (float)RAND_MAX;
-}
-
-static LARGE_INTEGER qpc_freq;
-float qpc_ms(LARGE_INTEGER a, LARGE_INTEGER b)
-{
-    return (float)((b.QuadPart - a.QuadPart) * 1000.0 / (double)qpc_freq.QuadPart);
-}
-
-float findPercentile(float *data, int count, float percentile)
-{
-    // Copy into a temp array (no std::sort)
-    float temp[256];
-    for (int i = 0; i < count; i++)
-        temp[i] = data[i];
-
-    // Simple bubble sort (fast enough for 256 elements)
-    for (int i = 0; i < count - 1; i++)
-        for (int j = 0; j < count - i - 1; j++)
-            if (temp[j] > temp[j + 1])
-            {
-                float t = temp[j];
-                temp[j] = temp[j + 1];
-                temp[j + 1] = t;
-            }
-
-    int index = (int)(percentile * count);
-    if (index < 0)
-        index = 0;
-    if (index >= count)
-        index = count - 1;
-
-    return temp[index];
+    return (float)rand() / (float)RAND_MAX;
 }
 
 void PrintMatrix(const DirectX::XMFLOAT4X4 &matrix)
@@ -108,11 +87,14 @@ void PrintMatrix(const DirectX::XMFLOAT4X4 &matrix)
 float sampleHeightmap(float *heightmap, int dim, float _worldSpacePosX, float _worldSpacePosY, float quadSize, float terrainDimQuads)
 {
     // convert to [0, 1]
-    float x = _worldSpacePosX / terrainDimQuads;
-    float y = _worldSpacePosY / terrainDimQuads;
+    float x = _worldSpacePosX / (float)dim;
+    float y = _worldSpacePosY / (float)dim;
 
-    x *= dim;
-    y *= dim;
+    x = (float)SDL_clamp((float)x, 0.0, 1.0f);
+    y = (float)SDL_clamp((float)y, 0.0, 1.0f);
+
+    x *= (float)terrainDimQuads;
+    y *= (float)terrainDimQuads;
 
     int x0 = (int)(x / quadSize);
     int y0 = (int)(y / quadSize);
@@ -155,7 +137,7 @@ struct DescriptorHeapAllocator
         HeapStartGpu = Heap->GetGPUDescriptorHandleForHeapStart();
         HeapHandleIncrement = device->GetDescriptorHandleIncrementSize(HeapType);
         FreeIndices.reserve((int)desc.NumDescriptors);
-        for (int n = desc.NumDescriptors; n > 0; n--)
+        for (UINT n = desc.NumDescriptors; n > 0; n--)
             FreeIndices.push_back(n - 1);
     }
     void Destroy()
@@ -434,8 +416,8 @@ int main(void)
     D3D12_RESOURCE_DESC depthDesc = {};
     depthDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
     depthDesc.Alignment = 0;
-    depthDesc.Width = width;
-    depthDesc.Height = height;
+    depthDesc.Width = (UINT64)width;
+    depthDesc.Height = (UINT64)height;
     depthDesc.DepthOrArraySize = 1;
     depthDesc.MipLevels = 1;
     depthDesc.Format = DXGI_FORMAT_D32_FLOAT;
@@ -591,175 +573,114 @@ int main(void)
         return 1;
     }
 
-    // // FROM MICROSOFT:
-    // // Command lists are created in the recording state, but there is nothing
-    // // to record yet. The main loop expects it to be closed, so close it now.
-    // hr = commandList->Close();
-    // if (FAILED(hr))
-    // {
-    //     errhr("Failed to Close command list", hr);
-    //     return 1;
-    // }
-
-    // vertex
-    struct vertex
-    {
-        DirectX::XMFLOAT3 position;
-        DirectX::XMFLOAT2 texCoords;
-        DirectX::XMFLOAT3 normals;
-    };
-
     const float aspectRatio = (float)width / (float)height;
-    float triScale = 0.5f; // a value of 0.5f will mean that 1 quad is 1 unit
-    float tsX = 0.5f;
-    vertex quadsVertices[] = {
-        // {{-tsX, 0.0f, tsX}, {0.0f, 0.0f}},
-        // {{tsX, 0.0f, -tsX}, {1.0f, 1.0f}},
-        // {{-tsX, 0.0f, -tsX}, {0.0f, 1.0f}},
 
-        // {{-tsX, 0.0f, tsX}, {0.0f, 0.0f}},
-        // {{tsX, 0.0f, tsX}, {1.0f, 0.0f}},
-        // {{tsX, 0.0f, -tsX}, {1.0f, 1.0f}},
+    int img_w, img_h, img_channels;
+    unsigned short *img_pixels = stbi_load_16("heightmap.png", &img_w, &img_h, &img_channels, 1);
 
-        // {{-tsX, 0.0f, -tsX}, {0.0f, 0.0f}},
-        // {{0.0f, 0.0f, 0.0f}, {0.5f, 0.5f}},
-        // {{tsX, 0.0f, -tsX}, {1.0f, 0.0f}},
-
-        // {{-tsX, 0.0f, tsX}, {0.0f, 1.0f}},
-        // {{0.0f, 0.0f, 0.0f}, {0.5f, 0.5f}},
-        // {{-tsX, 0.0f, -tsX}, {0.0f, 0.0f}},
-
-        // {{-tsX, 0.0f, tsX}, {0.0f, 1.0f}},
-        // {{tsX, 0.0f, tsX}, {1.0f, 1.0f}},
-        // {{0.0f, 0.0f, 0.0f}, {0.5f, 0.5f}},
-
-        // {{tsX, 0.0f, tsX}, {1.0f, 1.0f}},
-        // {{tsX, 0.0f, -tsX}, {1.0f, 0.0f}},
-        // {{0.0f, 0.0f, 0.0f}, {0.5f, 0.5f}},
-
-        {{-tsX, 0, 0}, {0.0f, 0.5f}},
-        {{0, 0, 0}, {0.5f, 0.5f}},
-        {{-tsX, 0, -tsX}, {0.0f, 0.0f}},
-
-        {{-tsX, 0, -tsX}, {0.0f, 0.0f}},
-        {{0, 0, 0}, {0.5f, 0.5f}},
-        {{0, 0, -tsX}, {0.5f, 0.0f}},
-
-        {{0, 0, -tsX}, {0.5f, 0.0f}},
-        {{0, 0, 0}, {0.5f, 0.5f}},
-        {{tsX, 0, -tsX}, {1.0f, 0.0f}},
-
-        {{0, 0, 0}, {0.5f, 0.5f}},
-        {{tsX, 0, 0}, {1.0f, 0.5f}},
-        {{tsX, 0, -tsX}, {1.0f, 0.0f}},
-
-        {{-tsX, 0, tsX}, {0.0f, 1.0f}},
-        {{0, 0, 0}, {0.5f, 0.5f}},
-        {{-tsX, 0, 0}, {0.0f, 0.5f}},
-
-        {{-tsX, 0, tsX}, {0.0f, 1.0f}},
-        {{0, 0, tsX}, {0.5f, 1.0f}},
-        {{0, 0, 0}, {0.5f, 0.5f}},
-
-        {{0, 0, tsX}, {0.5f, 1.0f}},
-        {{tsX, 0, tsX}, {1.0f, 1.0f}},
-        {{0, 0, 0}, {0.5f, 0.5f}},
-
-        {{tsX, 0, tsX}, {1.0f, 1.0f}},
-        {{tsX, 0, 0}, {1.0f, 0.5f}},
-        {{0, 0, 0}, {0.5f, 0.5f}},
-    };
-
-    float quadSize = 1.0f;
-
-    const int quadsVerticesNumber = ARRAYSIZE(quadsVertices);
-
-    SDL_Surface *img = IMG_Load("heightmap.png");
-    if (!img)
+    if (!img_pixels)
     {
-        err("IMG_Load failed");
+        err("stbi_load_16 failed");
         return 1;
     }
-    SDL_Log("Format: %s", SDL_GetPixelFormatName(img->format));
-    SDL_Log("Pitch: %d", img->pitch);
 
-    Uint32 *img_pixels = (Uint32 *)img->pixels;
+    SDL_Log("Loaded 16-bit PNG: %dx%d, channels=%d", img_w, img_h, img_channels);
 
-    int img_w = img->w;
-    int img_h = img->h;
-    int terrainDimInQuads = img_w-1;
-    static float *heightmap = (float *)SDL_malloc((size_t)(img_w * img_h * sizeof(float)));
-    for (int x = 0; x < img_w; x++)
+    // Allocate float heightmap
+    int terrainDimInQuads = img_w - 1;
+    float *heightmap = (float *)SDL_malloc(img_w * img_h * sizeof(float));
+
+    for (int y = 0; y < img_h; y++)
     {
-        for (int y = 0; y < img_h; y++)
+        for (int x = 0; x < img_w; x++)
         {
-            Uint32 index = img_pixels[y * img_w + x];
+            // 16-bit grayscale pixel
+            unsigned short actualColour = img_pixels[y * img_w + (img_w - 1 - x)];
 
-            Uint8 actualColour = (index) & 0xFF; // for grayscale, r == g == b
+            float normalized = (float)actualColour / 65535.0f;
 
-            float heightScale = (float)terrainDimInQuads / 10.0f;
-            heightScale *= 10.0f;
-            // float heightScale = 0.0f;
-            float h = (actualColour / 255.0f) * heightScale;
+            // Apply your height scale
+            float heightScale = ((float)terrainDimInQuads * 0.066f);
+            float h = normalized * heightScale;
+
             heightmap[x + y * img_w] = h;
         }
     }
+    stbi_image_free(img_pixels);
 
-    const int terrainMeshSizeInVertices = (quadsVerticesNumber)*terrainDimInQuads * terrainDimInQuads;
-    const int terrainMeshBufferSize = terrainMeshSizeInVertices * sizeof(vertex);
-    static vertex *triangleVertices = nullptr;
-    if (!triangleVertices)
+    static int terrainPointsNum = img_w * img_h;
+    static size_t terrainPointsSize = sizeof(vertex) * terrainPointsNum;
+    static vertex *terrainPoints = (vertex *)SDL_malloc(terrainPointsSize);
+    for (int x = 0; x < img_w; ++x)
     {
-        triangleVertices = (vertex *)SDL_malloc((size_t)(terrainMeshBufferSize));
-    }
-
-    for (int i = 0; i < terrainMeshSizeInVertices; i += quadsVerticesNumber)
-    {
-        int currentX = (i / quadsVerticesNumber) % terrainDimInQuads;
-        int currentY = (i / quadsVerticesNumber) / terrainDimInQuads;
-
-        for (Uint32 j = 0; j < quadsVerticesNumber; j++)
+        for (int y = 0; y < img_h; ++y)
         {
-            vertex v = quadsVertices[j];
+            float _x = (float)x;
+            float _y = heightmap[x + y * img_w];
+            float _z = (float)y;
 
-            v.position.x += (float)currentX * quadSize;
-            v.position.z += (float)currentY * quadSize;
-            v.position.y = sampleHeightmap(heightmap, img_w,
-                                           v.position.x, v.position.z,
-                                           quadSize, (float)terrainDimInQuads);
+            vertex v = {};
+            v.position.x = _x;
+            v.position.y = _y;
+            v.position.z = _z;
 
-            // --- Compute geometric normal using heightmap sampling ---
-            float x = v.position.x;
-            float z = v.position.z;
+            // v.texCoords.x = (x % 2 == 0) ? 0.0f : 1.0f;
+            // v.texCoords.y = (y % 2 == 0) ? 0.0f : 1.0f;
 
-            float hL = sampleHeightmap(heightmap, img_w, x - 1.0f, z, quadSize, (float)terrainDimInQuads);
-            float hR = sampleHeightmap(heightmap, img_w, x + 1.0f, z, quadSize, (float)terrainDimInQuads);
-            float hD = sampleHeightmap(heightmap, img_w, x, z - 1.0f, quadSize, (float)terrainDimInQuads);
-            float hU = sampleHeightmap(heightmap, img_w, x, z + 1.0f, quadSize, (float)terrainDimInQuads);
+            float tile = 512.0f;
+            v.texCoords.x = ((float)x / (float)(img_w - 1)) * tile;
+            v.texCoords.y = ((float)y / (float)(img_h - 1)) * tile;
 
-            v3 e1 = {2.0f, hR - hL, 0.0f}; // X direction
-            v3 e2 = {0.0f, hU - hD, 2.0f}; // Z direction
+            int xl = (x > 0) ? x - 1 : x;
+            int xr = (x < img_w - 1) ? x + 1 : x;
+            int yd = (y > 0) ? y - 1 : y;
+            int yu = (y < img_h - 1) ? y + 1 : y;
+            float hL = heightmap[xl + y * img_w];
+            float hR = heightmap[xr + y * img_w];
+            float hD = heightmap[x + yd * img_w];
+            float hU = heightmap[x + yu * img_w];
 
-            v3 normal = v3::normalised(v3::cross(e2, e1));
+            // Tangent vectors in X and Z directions
+            v3 dx = {2.0f, hR - hL, 0.0f};
+            v3 dz = {0.0f, hU - hD, 2.0f};
 
-            v.normals.x = normal.x;
-            v.normals.y = normal.y;
-            v.normals.z = normal.z;
+            v3 n = v3::normalised(v3::cross(dz, dx));
 
-            triangleVertices[i + j] = v;
+            v.normals.x = n.x;
+            v.normals.y = n.y;
+            v.normals.z = n.z;
+
+            terrainPoints[x + y * img_w] = v;
         }
     }
 
-    const UINT vertexBufferSize = terrainMeshBufferSize;
+    const UINT vertexBufferSize = (UINT)terrainPointsSize;
 
-    // create index buffer
-    static Uint32 terrainMeshIndexBufferNum = 3 * (terrainDimInQuads * (sizeof(quadsVertices) / quadsVerticesNumber)) * terrainDimInQuads;
-    static size_t terrainMeshIndexBufferSize = (size_t)(terrainMeshIndexBufferNum * sizeof(Uint32));
-    static Uint32 *terrainMeshIndexBuffer = (Uint32 *)SDL_malloc(terrainMeshIndexBufferSize);
-
-    for (Uint32 i = 0; i < terrainMeshIndexBufferNum; i++)
+    struct quad_indices
     {
-        terrainMeshIndexBuffer[i] = i; // identity mapping
+        Uint32 indices[6];
+    };
+    int quadNum = (img_w - 1) * (img_h - 1);
+    static size_t terrainMeshIndexBufferSize = (size_t)(quadNum * sizeof(quad_indices));
+    static quad_indices *terrainMeshIndexBuffer = (quad_indices *)SDL_malloc((size_t)(terrainMeshIndexBufferSize));
+    static Uint32 terrainMeshIndexBufferNum = 6U * quadNum;
+
+    for (Uint32 y = 0; y < (Uint32)(img_h - 1); ++y)
+    {
+        for (Uint32 x = 0; x < (Uint32)(img_w - 1); ++x)
+        {
+            Uint32 i = x + y * img_w;
+
+            quad_indices q = {};
+            q.indices[0] = i;
+            q.indices[1] = i + img_w;
+            q.indices[2] = i + img_w + 1;
+            q.indices[3] = i;
+            q.indices[4] = i + img_w + 1;
+            q.indices[5] = i + 1;
+
+            terrainMeshIndexBuffer[x + y * (img_w - 1)] = q;
+        }
     }
 
     ID3D12Resource *indexBuffer = nullptr;
@@ -837,7 +758,8 @@ int main(void)
         errhr("Map failed (vertex buffer)", hr);
         return 1;
     }
-    memcpy(vertexDataBegin, triangleVertices, terrainMeshBufferSize);
+    // memcpy(vertexDataBegin, triangleVertices, terrainMeshBufferSize);
+    memcpy(vertexDataBegin, terrainPoints, terrainPointsSize);
     renderState.vertexBuffer->Unmap(0, nullptr);
 
     D3D12_VERTEX_BUFFER_VIEW vertexBufferView = {};
@@ -862,9 +784,8 @@ int main(void)
     // renderState.bundle->DrawInstanced(terrainMeshSizeInVertices, 1, 0, 0);
     renderState.bundle->Close();
 
-    // ------------------------------------------------------------
     // Load BC7 DDS (with baked mipmaps) using DirectXTex
-    // ------------------------------------------------------------
+
     DirectX::ScratchImage image;
     DirectX::TexMetadata metadata;
 
@@ -879,9 +800,8 @@ int main(void)
         return 1;
     }
 
-    // ------------------------------------------------------------
     // Create GPU texture resource
-    // ------------------------------------------------------------
+
     D3D12_RESOURCE_DESC textureDesc = {};
     textureDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
     textureDesc.Alignment = 0;
@@ -910,9 +830,8 @@ int main(void)
         return 1;
     }
 
-    // ------------------------------------------------------------
     // Prepare subresources (DirectXTex gives correct BC7 pitches)
-    // ------------------------------------------------------------
+
     std::vector<D3D12_SUBRESOURCE_DATA> subresources;
     subresources.reserve(image.GetImageCount());
 
@@ -921,14 +840,13 @@ int main(void)
     {
         D3D12_SUBRESOURCE_DATA s = {};
         s.pData = imgs[i].pixels;
-        s.RowPitch = imgs[i].rowPitch;
-        s.SlicePitch = imgs[i].slicePitch;
+        s.RowPitch = (LONG_PTR)imgs[i].rowPitch;
+        s.SlicePitch = (LONG_PTR)imgs[i].slicePitch;
         subresources.push_back(s);
     }
 
-    // ------------------------------------------------------------
     // Create upload heap
-    // ------------------------------------------------------------
+
     UINT64 uploadBufferSize =
         GetRequiredIntermediateSize(renderState.texture, 0, (UINT)subresources.size());
 
@@ -949,9 +867,8 @@ int main(void)
         return 1;
     }
 
-    // ------------------------------------------------------------
     // Upload all mip levels
-    // ------------------------------------------------------------
+
     UpdateSubresources(
         renderState.commandList,
         renderState.texture,
@@ -967,9 +884,7 @@ int main(void)
         D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     renderState.commandList->ResourceBarrier(1, &barrier);
 
-    // ------------------------------------------------------------
     // Create SRV
-    // ------------------------------------------------------------
     D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
     srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
     srvDesc.Format = metadata.format; // must match BC7 format
@@ -985,81 +900,9 @@ int main(void)
         &srvDesc,
         srvHandleCPU);
 
-    // // generate texture
-    // const int texWidth = 16;
-    // const int texHeight = 16;
-    // unsigned int textureData[texWidth * texHeight] = {};
-    // for (int i = 0; i < texWidth * texHeight; ++i)
-    // {
-    //     int x = i % texWidth;
-    //     int y = i / texHeight;
-    //     if ((x + y) % 2 == 0)
-    //         textureData[i] = 0xff444411;
-    //     else
-    //         textureData[i] = 0xff44cc11;
-    // }
-
-    // ID3D12Resource *textureUploadHeap = nullptr;
-    // D3D12_RESOURCE_DESC textureDesc = {};
-    // textureDesc.MipLevels = 1;
-    // textureDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-    // textureDesc.Width = texWidth;
-    // textureDesc.Height = texHeight;
-    // textureDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
-    // textureDesc.DepthOrArraySize = 1;
-    // textureDesc.SampleDesc.Count = 1;
-    // textureDesc.SampleDesc.Quality = 0;
-    // textureDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-
-    // CD3DX12_HEAP_PROPERTIES heapPropsDefault(D3D12_HEAP_TYPE_DEFAULT);
-    // hr = renderState.device->CreateCommittedResource(
-    //     &heapPropsDefault,
-    //     D3D12_HEAP_FLAG_NONE,
-    //     &textureDesc,
-    //     D3D12_RESOURCE_STATE_COPY_DEST,
-    //     nullptr,
-    //     IID_PPV_ARGS(&renderState.texture));
-    // if (FAILED(hr))
-    // {
-    //     errhr("CreateCommittedResource (texture)", hr);
-    //     return 1;
-    // }
-    // const UINT64 uploadBufferSize = GetRequiredIntermediateSize(renderState.texture, 0, 1);
-
-    // // gpu upload buffer
-    // CD3DX12_RESOURCE_DESC uploadBufferDesc = CD3DX12_RESOURCE_DESC::Buffer(uploadBufferSize);
-    // hr = renderState.device->CreateCommittedResource(
-    //     &heapPropsUpload,
-    //     D3D12_HEAP_FLAG_NONE,
-    //     &uploadBufferDesc,
-    //     D3D12_RESOURCE_STATE_GENERIC_READ,
-    //     nullptr,
-    //     IID_PPV_ARGS(&textureUploadHeap));
-    // if (FAILED(hr))
-    // {
-    //     errhr("CreateCommittedResource failed (gpu upload buffer)", hr);
-    //     return 1;
-    // }
-
-    // D3D12_SUBRESOURCE_DATA textureDataDesc = {};
-    // textureDataDesc.pData = textureData;
-    // textureDataDesc.RowPitch = texWidth * sizeof(textureData[0]);
-    // textureDataDesc.SlicePitch = textureDataDesc.RowPitch * texHeight;
-
-    // UpdateSubresources(renderState.commandList, renderState.texture, textureUploadHeap, 0, 0, 1, &textureDataDesc);
-
     CD3DX12_RESOURCE_BARRIER commandListResourceBarrierTransitionPixelShader = CD3DX12_RESOURCE_BARRIER::Transition(renderState.texture, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     renderState.commandList->ResourceBarrier(1, &commandListResourceBarrierTransitionPixelShader);
 
-    // SRV for texture
-
-    // D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-    // srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    // srvDesc.Format = textureDesc.Format;
-    // srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-    // srvDesc.Texture2D.MipLevels = 1;
-    // D3D12_CPU_DESCRIPTOR_HANDLE srvHandleCPU = renderState.srvHeap->GetCPUDescriptorHandleForHeapStart();
-    // srvHandleCPU.ptr += cbvSrvDescriptorSize;
     renderState.device->CreateShaderResourceView(renderState.texture, &srvDesc, srvHandleCPU);
     // end of texture
 
@@ -1156,17 +999,17 @@ int main(void)
     uint64_t lastCounter = SDL_GetPerformanceCounter();
     float deltaTime = 0.0f;
     // main program
-    static LARGE_INTEGER t0, t1, t2, t3 = {};
+
     QueryPerformanceFrequency(&qpc_freq);
 
     programState.isRunning = true;
     while (programState.isRunning)
     {
-        float update_ms = qpc_ms(t0, t1);
-        float render_ms = qpc_ms(t1, t2);
-        float present_ms = qpc_ms(t2, t3);
-        float frame_ms = qpc_ms(t0, t3);
-        QueryPerformanceCounter(&t0);
+        profiling.update_ms = qpc_ms(profiling.t0, profiling.t1);
+        profiling.render_ms = qpc_ms(profiling.t1, profiling.t2);
+        profiling.present_ms = qpc_ms(profiling.t2, profiling.t3);
+        profiling.frame_ms = qpc_ms(profiling.t0, profiling.t3);
+        QueryPerformanceCounter(&profiling.t0);
 
         mouseXrel = 0.0f;
         mouseYrel = 0.0f;
@@ -1260,32 +1103,25 @@ int main(void)
                         ImGui::GetIO().Framerate);
 
             // basic profiling
-            static float frameRateHistory[256] = {};
-            uint64_t frameHistoryIndex = programState.ticksElapsed % 256;
-            frameRateHistory[frameHistoryIndex] = ImGui::GetIO().Framerate;
-            ImGui::PlotLines("Frametime", frameRateHistory, IM_ARRAYSIZE(frameRateHistory), (int)frameHistoryIndex);
 
-            int count = 256;
+            uint64_t frameHistoryIndex = programState.ticksElapsed % 256;
+            profiling.frameRateHistory[frameHistoryIndex] = ImGui::GetIO().Framerate;
+            ImGui::PlotLines("Frametime", profiling.frameRateHistory, IM_ARRAYSIZE(profiling.frameRateHistory), (int)frameHistoryIndex);
 
             // FPS values
-            float fps_1pct_low = findPercentile(frameRateHistory, count, 0.01f);
-            float fps_01pct_low = findPercentile(frameRateHistory, count, 0.001f);
-            float fps_peak = findPercentile(frameRateHistory, count, 0.999f);
-            float fps_min = findPercentile(frameRateHistory, count, 0.0f);
-            float fps_max = findPercentile(frameRateHistory, count, 1.0f);
+            profiling.update_fps();
+            ImGui::Text("1%% Low:  %.2f FPS", profiling.fps_1pct_low);
+            ImGui::Text("0.1%% Low:%.2f FPS", profiling.fps_01pct_low);
+            ImGui::Text("Peak:    %.2f FPS", profiling.fps_peak);
+            ImGui::Text("Min:     %.2f FPS", profiling.fps_min);
+            ImGui::Text("Max:     %.2f FPS", profiling.fps_max);
 
-            ImGui::Text("1%% Low:  %.2f FPS", fps_1pct_low);
-            ImGui::Text("0.1%% Low:%.2f FPS", fps_01pct_low);
-            ImGui::Text("Peak:    %.2f FPS", fps_peak);
-            ImGui::Text("Min:     %.2f FPS", fps_min);
-            ImGui::Text("Max:     %.2f FPS", fps_max);
+            ImGui::Text("Update:  %.3f ms", profiling.update_ms);
+            ImGui::Text("Render:  %.3f ms", profiling.render_ms);
+            ImGui::Text("Present: %.3f ms", profiling.present_ms);
+            ImGui::Text("Frame:   %.3f ms", profiling.frame_ms);
 
-            ImGui::Text("Update:  %.3f ms", update_ms);
-            ImGui::Text("Render:  %.3f ms", render_ms);
-            ImGui::Text("Present: %.3f ms", present_ms);
-            ImGui::Text("Frame:   %.3f ms", frame_ms);
-
-            ImGui::Text("Vertices:%d", terrainMeshSizeInVertices);
+            ImGui::Text("Vertices:%d", terrainPointsNum);
 
             ImGui::Checkbox("VSync", &vsync);
             if (gamepad)
@@ -1318,8 +1154,6 @@ int main(void)
         {
             movingPoint = -offsetBounds;
         }
-        float angle = movingPoint;
-        float radius = 4.0f;
 
         static float cameraYaw = PI * 2.26f / 3.0f;
         static float cameraPitch = 0.0f;
@@ -1399,7 +1233,7 @@ int main(void)
         cameraPos = cameraPos + (cameraForward * forwardSpeed);
         cameraPos = cameraPos + (cameraRight * strafeSpeed);
 
-        QueryPerformanceCounter(&t1);
+        QueryPerformanceCounter(&profiling.t1);
 
         // main matrix update
         v3 atPos = cameraPos + cameraForward;
@@ -1496,7 +1330,7 @@ int main(void)
         ID3D12CommandList *commandListsPerFrame[] = {renderState.commandList};
         renderState.commandQueue->ExecuteCommandLists(_countof(commandListsPerFrame), commandListsPerFrame);
 
-        QueryPerformanceCounter(&t2);
+        QueryPerformanceCounter(&profiling.t2);
 
         hr = renderState.swapChain->Present((vsync) ? 1 : 0, (vsync) ? 0 : DXGI_PRESENT_ALLOW_TEARING);
         if (FAILED(hr))
@@ -1530,7 +1364,7 @@ int main(void)
 
         programState.ticksElapsed++;
 
-        QueryPerformanceCounter(&t3);
+        QueryPerformanceCounter(&profiling.t3);
     }
     // // SDL_SetWindowBordered(programState.window, true);
     // SDL_SyncWindow(programState.window);
