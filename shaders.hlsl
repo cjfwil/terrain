@@ -48,20 +48,6 @@ VSOut VSMain(float3 position : POSITION, float2 uv : TEXCOORD, float3 norm : NOR
 }
 
 
-
-float3 SmoothNormal(float3 worldPos)
-{
-    float3 dx = ddx(worldPos);
-    float3 dy = ddy(worldPos);
-
-    float3 n = cross(dx, dy);
-    
-    if (n.y < 0) n = -n;
-
-    return normalize(n);
-}
-
-
 float4 PSMain(VSOut IN) : SV_Target
 {
     const float3 lightDir = normalize(float3(0.5f, -1.0f, 0.2f));

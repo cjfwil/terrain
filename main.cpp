@@ -30,42 +30,18 @@
 #include <SDL3/SDL_thread.h>
 #include <SDL3_image/SDL_image.h>
 
-#define STB_IMAGE_IMPLEMENTATION
-#include "stb_image.h"
 #pragma warning(pop)
 
 #include "src/metadata.h"
 #include "src/error.h"
 #include "src/profiling.h"
+#include "src/v3.h"
+#include "src/baked_heightmap_mesh.h"
+
+#include "src/render_dx12.h"
 
 #define PI 3.1415926535897932384626433832795f
 #define PI_OVER_2 1.5707963267948966192313216916398f
-
-struct v3
-{
-    float x;
-    float y;
-    float z;
-
-    v3 operator+(const v3 &v) const { return {x + v.x, y + v.y, z + v.z}; }
-    v3 operator-(const v3 &v) const { return {x - v.x, y - v.y, z - v.z}; }
-    v3 operator*(float s) const { return {x * s, y * s, z * s}; }
-
-    static v3 cross(const v3 &a, const v3 &b) { return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x}; }
-
-    static v3 normalised(const v3 &a)
-    {
-        float mag = sqrtf(a.x * a.x + a.y * a.y + a.z * a.z);
-        return {a.x / mag, a.y / mag, a.z / mag};
-    }
-};
-
-struct vertex
-{
-    DirectX::XMFLOAT3 position;
-    DirectX::XMFLOAT2 texCoords;
-    DirectX::XMFLOAT3 normals;
-};
 
 inline float randf()
 {
@@ -117,51 +93,6 @@ float sampleHeightmap(float *heightmap, int dim, float _worldSpacePosX, float _w
     return hx0 + (hx1 - hx0) * ty;
 }
 
-// Simple free list based allocator
-struct DescriptorHeapAllocator
-{
-    ID3D12DescriptorHeap *Heap = nullptr;
-    D3D12_DESCRIPTOR_HEAP_TYPE HeapType = D3D12_DESCRIPTOR_HEAP_TYPE_NUM_TYPES;
-    D3D12_CPU_DESCRIPTOR_HANDLE HeapStartCpu;
-    D3D12_GPU_DESCRIPTOR_HANDLE HeapStartGpu;
-    UINT HeapHandleIncrement;
-    ImVector<int> FreeIndices;
-
-    void Create(ID3D12Device *device, ID3D12DescriptorHeap *heap)
-    {
-        IM_ASSERT(Heap == nullptr && FreeIndices.empty());
-        Heap = heap;
-        D3D12_DESCRIPTOR_HEAP_DESC desc = heap->GetDesc();
-        HeapType = desc.Type;
-        HeapStartCpu = Heap->GetCPUDescriptorHandleForHeapStart();
-        HeapStartGpu = Heap->GetGPUDescriptorHandleForHeapStart();
-        HeapHandleIncrement = device->GetDescriptorHandleIncrementSize(HeapType);
-        FreeIndices.reserve((int)desc.NumDescriptors);
-        for (UINT n = desc.NumDescriptors; n > 0; n--)
-            FreeIndices.push_back((int)n - 1);
-    }
-    void Destroy()
-    {
-        Heap = nullptr;
-        FreeIndices.clear();
-    }
-    void Alloc(D3D12_CPU_DESCRIPTOR_HANDLE *out_cpu_desc_handle, D3D12_GPU_DESCRIPTOR_HANDLE *out_gpu_desc_handle)
-    {
-        IM_ASSERT(FreeIndices.Size > 0);
-        int idx = FreeIndices.back();
-        FreeIndices.pop_back();
-        out_cpu_desc_handle->ptr = HeapStartCpu.ptr + (idx * HeapHandleIncrement);
-        out_gpu_desc_handle->ptr = HeapStartGpu.ptr + (idx * HeapHandleIncrement);
-    }
-    void Free(D3D12_CPU_DESCRIPTOR_HANDLE out_cpu_desc_handle, D3D12_GPU_DESCRIPTOR_HANDLE out_gpu_desc_handle)
-    {
-        int cpu_idx = (int)((out_cpu_desc_handle.ptr - HeapStartCpu.ptr) / HeapHandleIncrement);
-        int gpu_idx = (int)((out_gpu_desc_handle.ptr - HeapStartGpu.ptr) / HeapHandleIncrement);
-        IM_ASSERT(cpu_idx == gpu_idx);
-        FreeIndices.push_back(cpu_idx);
-    }
-};
-
 static struct
 {
     SDL_Window *window;
@@ -179,40 +110,6 @@ static struct
     DirectX::XMVECTOR cameraPos;
     float planetScaleRatio = 1.0f / 75.0f;
 } constantBufferData;
-
-static struct
-{
-    ID3D12DescriptorHeap *imguiSrvHeap = nullptr;
-    DescriptorHeapAllocator imguiSrvAllocator;
-    // init
-    IDXGIFactory6 *factory = nullptr;
-    IDXGIAdapter4 *hardwareAdapter = nullptr;
-    ID3D12Device *device = nullptr;
-    IDXGISwapChain1 *swapChain1 = nullptr; // only for initialisation
-    IDXGISwapChain4 *swapChain = nullptr;
-    ID3D12CommandQueue *commandQueue = nullptr;
-    ID3D12DescriptorHeap *rtvHeap = nullptr;
-    ID3D12DescriptorHeap *srvHeap = nullptr;
-    static const int frameCount = 3;
-    ID3D12CommandAllocator *commandAllocators[frameCount] = {};
-    ID3D12Resource *renderTargets[frameCount] = {};
-    ID3D12Resource *depthBuffer = nullptr;
-    ID3D12DescriptorHeap *dsvHeap = nullptr;
-    ID3D12CommandAllocator *bundleAllocator = nullptr;
-    ID3D12RootSignature *rootSignature = nullptr;
-    ID3D12Fence *fence = nullptr;
-    ID3D12PipelineState *pipelineState = nullptr;
-    ID3D12GraphicsCommandList *commandList = nullptr;
-    ID3DBlob *vertexShader = nullptr;
-    ID3DBlob *pixelShader = nullptr;
-    ID3D12Resource *texture = nullptr;
-    ID3D12Resource *constantBuffer = nullptr;
-    ID3D12Resource *vertexBuffer = nullptr;
-    ID3D12GraphicsCommandList *bundle = nullptr;
-    const DXGI_FORMAT rtvFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
-
-    // end of init
-} renderState;
 
 int main(void)
 {
@@ -577,180 +474,25 @@ int main(void)
 
     const float aspectRatio = (float)width / (float)height;
 
-    int img_w, img_h, img_channels;
-    unsigned short *img_pixels = stbi_load_16("heightmap.png", &img_w, &img_h, &img_channels, 1);
-
-    if (!img_pixels)
+    int bakedResult = baked_heightmap_mesh.baked();
+    if (bakedResult != 0)
     {
-        err("stbi_load_16 failed");
+        err("Baked Mesh failed");
         return 1;
     }
 
-    SDL_Log("Loaded 16-bit PNG: %dx%d, channels=%d", img_w, img_h, img_channels);
-
-    // Allocate float heightmap
-    int terrainDimInQuads = img_w - 1;
-    float *heightmap = (float *)SDL_malloc(img_w * img_h * sizeof(float));
-
-    for (int y = 0; y < img_h; y++)
+    d3d12_index_buffer terrainMeshIndexBuffer = {};
+    if (!terrainMeshIndexBuffer.create_and_upload(baked_heightmap_mesh.terrainMeshIndexBufferSize, baked_heightmap_mesh.terrainMeshIndexBuffer))
     {
-        for (int x = 0; x < img_w; x++)
-        {
-            // 16-bit grayscale pixel
-            unsigned short actualColour = img_pixels[y * img_w + (img_w - 1 - x)];
-
-            float normalized = (float)actualColour / 65535.0f;
-
-            // Apply height scale
-            // TODO: calculate actual scale required automatically?
-            const float swissAlps = 0.071f;
-            const float peloponessus = 0.021f;
-            float heightScale = ((float)terrainDimInQuads * peloponessus);
-            float h = normalized * heightScale;
-
-            heightmap[x + y * img_w] = h;
-        }
-    }
-    stbi_image_free(img_pixels);
-
-    static int terrainPointsNum = img_w * img_h;
-    static size_t terrainPointsSize = sizeof(vertex) * terrainPointsNum;
-    static vertex *terrainPoints = (vertex *)SDL_malloc(terrainPointsSize);
-    for (int x = 0; x < img_w; ++x)
-    {
-        for (int y = 0; y < img_h; ++y)
-        {
-            float _x = (float)x;
-            float _y = heightmap[x + y * img_w];
-            float _z = (float)y;
-
-            vertex v = {};
-            v.position.x = _x;
-            v.position.y = _y;
-            v.position.z = _z;
-
-            // v.texCoords.x = (x % 2 == 0) ? 0.0f : 1.0f;
-            // v.texCoords.y = (y % 2 == 0) ? 0.0f : 1.0f;
-
-            float tile = (float)img_w;
-            v.texCoords.x = ((float)x / (float)(img_w - 1)) * tile;
-            v.texCoords.y = ((float)y / (float)(img_h - 1)) * tile;
-
-            int xl = (x > 0) ? x - 1 : x;
-            int xr = (x < img_w - 1) ? x + 1 : x;
-            int yd = (y > 0) ? y - 1 : y;
-            int yu = (y < img_h - 1) ? y + 1 : y;
-            float hL = heightmap[xl + y * img_w];
-            float hR = heightmap[xr + y * img_w];
-            float hD = heightmap[x + yd * img_w];
-            float hU = heightmap[x + yu * img_w];
-
-            // Tangent vectors in X and Z directions
-            v3 dx = {2.0f, hR - hL, 0.0f};
-            v3 dz = {0.0f, hU - hD, 2.0f};
-
-            v3 n = v3::normalised(v3::cross(dz, dx));
-
-            v.normals.x = n.x;
-            v.normals.y = n.y;
-            v.normals.z = n.z;
-
-            terrainPoints[x + y * img_w] = v;
-        }
-    }
-
-    const UINT vertexBufferSize = (UINT)terrainPointsSize;
-
-    const Uint32 indicesPerQuad = 6;
-    struct quad_indices
-    {
-        Uint32 indices[indicesPerQuad];
-    };
-    int quadNum = (img_w - 1) * (img_h - 1);
-    static size_t terrainMeshIndexBufferSize = (size_t)(quadNum * sizeof(quad_indices) * 2); // TODO: calculate and alloc correct amount of space, we are doing double for now just because that is enough
-    static Uint32 terrainMeshIndexBufferNum = indicesPerQuad * quadNum;
-
-    const Uint32 chunkDimVerts = 64;
-    const Uint32 chunkNumDim = img_w / chunkDimVerts;
-    const Uint32 chunkNumTotal = chunkNumDim * chunkNumDim;
-    const Uint32 chunkDimQuads = chunkDimVerts - 1;
-    Uint32 writeIndex = 0;
-    const Uint32 maxLod = 6; // no higher than 6 for 64x64
-
-    struct lod_range
-    {
-        Uint32 startIndex[maxLod] = {};
-        Uint32 numIndices[maxLod] = {};
-    };
-
-    lod_range *lodRanges = (lod_range *)SDL_malloc((size_t)(chunkNumTotal * sizeof(lod_range)));
-    static quad_indices *terrainMeshIndexBuffer = (quad_indices *)SDL_malloc((size_t)(terrainMeshIndexBufferSize));
-    for (Uint32 lod = 0; lod < maxLod; ++lod)
-    {
-        Uint32 lodStep = 1U << lod; // 2 to the power of lod
-        for (Uint32 cy = 0; cy < chunkNumDim; ++cy)
-        {
-            for (Uint32 cx = 0; cx < chunkNumDim; ++cx)
-            {
-                Uint32 currentLodStart = writeIndex;
-                lodRanges[cx + cy * chunkNumDim].startIndex[lod] = currentLodStart;
-                for (Uint32 y = 0; y < chunkDimQuads; y += lodStep)
-                {
-                    for (Uint32 x = 0; x < chunkDimQuads; x += lodStep)
-                    {
-                        Uint32 chunkSpaceX = cx * chunkDimQuads;
-                        Uint32 chunkSpaceY = cy * chunkDimQuads;
-
-                        Uint32 i = (chunkSpaceX + x) + (chunkSpaceY + y) * img_w;
-
-                        quad_indices q = {};
-                        q.indices[0] = i;
-                        q.indices[1] = i + img_w * lodStep;
-                        q.indices[2] = i + img_w * lodStep + lodStep;
-                        q.indices[3] = i;
-                        q.indices[4] = i + img_w * lodStep + lodStep;
-                        q.indices[5] = i + lodStep;
-
-                        terrainMeshIndexBuffer[writeIndex++] = q;
-                    }
-                }
-                lodRanges[cx + cy * chunkNumDim].numIndices[lod] = writeIndex - currentLodStart;
-            }
-        }
-    }
-
-    ID3D12Resource *indexBuffer = nullptr;
-    CD3DX12_HEAP_PROPERTIES heapPropsUpload(D3D12_HEAP_TYPE_UPLOAD);
-    CD3DX12_RESOURCE_DESC indexBufferDesc = CD3DX12_RESOURCE_DESC::Buffer(terrainMeshIndexBufferSize);
-    hr = renderState.device->CreateCommittedResource(
-        &heapPropsUpload,
-        D3D12_HEAP_FLAG_NONE,
-        &indexBufferDesc,
-        D3D12_RESOURCE_STATE_GENERIC_READ,
-        nullptr,
-        IID_PPV_ARGS(&indexBuffer));
-    if (FAILED(hr))
-    {
-        errhr("CreateCommittedResource failed", hr);
+        err("Terrain Index Buffer Create and upload failed");
         return 1;
     }
-
-    Uint32 *gpuIndexData = nullptr;
-
-    CD3DX12_RANGE readRangeIndexBuffer(0, 0); // we do not intend to read from this resource
-    indexBuffer->Map(0, &readRangeIndexBuffer, (void **)&gpuIndexData);
-    memcpy(gpuIndexData, terrainMeshIndexBuffer, terrainMeshIndexBufferSize);
-    indexBuffer->Unmap(0, nullptr);
-
-    D3D12_INDEX_BUFFER_VIEW indexBufferView = {};
-    indexBufferView.BufferLocation = indexBuffer->GetGPUVirtualAddress();
-    indexBufferView.SizeInBytes = (UINT)terrainMeshIndexBufferSize;
-    indexBufferView.Format = DXGI_FORMAT_R32_UINT;
 
     // create constant buffer
     const UINT constantBufferSize = 256U;
     static UINT *CbvDataBegin = nullptr;
 
+    CD3DX12_HEAP_PROPERTIES heapPropsUpload(D3D12_HEAP_TYPE_UPLOAD);
     CD3DX12_RESOURCE_DESC constantBufferDesc = CD3DX12_RESOURCE_DESC::Buffer(constantBufferSize);
     hr = renderState.device->CreateCommittedResource(
         &heapPropsUpload,
@@ -774,34 +516,12 @@ int main(void)
     renderState.constantBuffer->Map(0, &readRangeCBV, reinterpret_cast<void **>(&CbvDataBegin));
     memcpy(CbvDataBegin, &constantBufferData, sizeof(constantBufferData));
 
-    // FROM MICROSOFT:
-    // Note: using upload heaps to transfer static data like vert buffers is not
-    // recommended. Every time the GPU needs it, the upload heap will be marshalled
-    // over. Please read up on Default Heap usage. An upload heap is used here for
-    // code simplicity and because there are very few verts to actually transfer.
-    CD3DX12_RESOURCE_DESC vertexBufferDesc = CD3DX12_RESOURCE_DESC::Buffer(vertexBufferSize);
-    hr = renderState.device->CreateCommittedResource(
-        &heapPropsUpload,
-        D3D12_HEAP_FLAG_NONE,
-        &vertexBufferDesc,
-        D3D12_RESOURCE_STATE_GENERIC_READ,
-        nullptr, IID_PPV_ARGS(&renderState.vertexBuffer));
-    UINT *vertexDataBegin = nullptr;
-    CD3DX12_RANGE readRange(0, 0);
-    hr = renderState.vertexBuffer->Map(0, &readRange, (void **)&vertexDataBegin);
-    if (FAILED(hr))
+    d3d12_vertex_buffer terrainMeshVertexBuffer;
+    if (!terrainMeshVertexBuffer.create_and_upload(baked_heightmap_mesh.terrainPointsSize, baked_heightmap_mesh.terrainPoints))
     {
-        errhr("Map failed (vertex buffer)", hr);
+        err("Terrain Mesh Vertex Buffer create and upload failed");
         return 1;
     }
-    // memcpy(vertexDataBegin, triangleVertices, terrainMeshBufferSize);
-    memcpy(vertexDataBegin, terrainPoints, terrainPointsSize);
-    renderState.vertexBuffer->Unmap(0, nullptr);
-
-    D3D12_VERTEX_BUFFER_VIEW vertexBufferView = {};
-    vertexBufferView.BufferLocation = renderState.vertexBuffer->GetGPUVirtualAddress();
-    vertexBufferView.StrideInBytes = sizeof(vertex);
-    vertexBufferView.SizeInBytes = vertexBufferSize;
 
     // CREATE BUNDLE
     hr = renderState.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_BUNDLE, renderState.bundleAllocator, renderState.pipelineState, IID_PPV_ARGS(&renderState.bundle));
@@ -813,9 +533,9 @@ int main(void)
 
     renderState.bundle->SetGraphicsRootSignature(renderState.rootSignature);
     renderState.bundle->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    renderState.bundle->IASetVertexBuffers(0, 1, &vertexBufferView);
-    renderState.bundle->IASetIndexBuffer(&indexBufferView);
-    renderState.bundle->DrawIndexedInstanced(terrainMeshIndexBufferNum, 1, 0, 0, 0);
+    renderState.bundle->IASetVertexBuffers(0, 1, &terrainMeshVertexBuffer.vertexBufferView);
+    renderState.bundle->IASetIndexBuffer(&terrainMeshIndexBuffer.indexBufferView);
+    renderState.bundle->DrawIndexedInstanced(baked_heightmap_mesh.terrainMeshIndexBufferNum, 1, 0, 0, 0);
 
     // renderState.bundle->DrawInstanced(terrainMeshSizeInVertices, 1, 0, 0);
     renderState.bundle->Close();
@@ -1127,19 +847,16 @@ int main(void)
         }
         programState.msElapsedSinceSDLInit = SDL_GetTicks();
 
-        static float debugBoostSpeed = 2.7778f; //same speed as average 16th century merchant vessel
+        static float debugBoostSpeed = 2.7778f; // same speed as average 16th century merchant vessel
         static int debugDrawOnlyChunk = 0;
 
-
         static int newBaseDist = 141;
-        static int drawDist[maxLod] = {150, 300, 600, 1200, 2400, 4800};
+        static int drawDist[BakedConstants::maxLod] = {150, 300, 600, 1200, 2400, 4800};
         static bool renderBeyondMaxRange = false;
-        
-        
+
         // 0.091f is a nice value for 1080p with good performance on a 2k heightmap, but more for flying up into the atmosphere, doesnt have an effect when on top of mountains
         static float heightbasedLODModScaler = 0.091f; // dont put this to zero or lower TODO: calculate appropriate min and max
         static bool enableHeightLODMod = false;
-        
 
         if (enableImgui)
         {
@@ -1154,16 +871,15 @@ int main(void)
                         ImGui::GetIO().Framerate);
 
             // basic profiling
-
-            ImGui::SliderInt("Chunk", &debugDrawOnlyChunk, 0, chunkNumTotal);
-            ImGui::SliderInt("LodDist", &newBaseDist, chunkDimVerts, 512);
+            
+            ImGui::SliderInt("LodDist", &newBaseDist, BakedConstants::chunkDimVerts, 512);
             static int planetScaleRatioDenom = 50;
             ImGui::SliderInt("Planet Scale 1:X", &planetScaleRatioDenom, 1, 100);
             constantBufferData.planetScaleRatio = 1.0f / (float)planetScaleRatioDenom;
 
             ImGui::SliderFloat("Debug Speed Boost", &debugBoostSpeed, 1.0f, 1000.0f, "%.3f", ImGuiSliderFlags_Logarithmic);
 
-            for (int i = 0; i < maxLod; ++i)
+            for (int i = 0; i < BakedConstants::maxLod; ++i)
             {
                 ImGui::Text("LOD%d: %d", i, drawDist[i]);
             }
@@ -1172,13 +888,13 @@ int main(void)
             profiling.frameRateHistory[frameHistoryIndex] = ImGui::GetIO().Framerate;
             ImGui::PlotLines("Frametime", profiling.frameRateHistory, IM_ARRAYSIZE(profiling.frameRateHistory), (int)frameHistoryIndex);
 
-
             // options
             ImGui::Checkbox("VSync", &vsync);
             ImGui::Checkbox("Render beyond Max range", &renderBeyondMaxRange);
-            ImGui::Checkbox("Boost terrain detail when camera is higher", &enableHeightLODMod);            
-            if (enableHeightLODMod) {
-                ImGui::SliderFloat("Scaler", &heightbasedLODModScaler, 0.01f, 0.1f, "%.3f", ImGuiSliderFlags_Logarithmic);                            
+            ImGui::Checkbox("Boost terrain detail when camera is higher", &enableHeightLODMod);
+            if (enableHeightLODMod)
+            {
+                ImGui::SliderFloat("Scaler", &heightbasedLODModScaler, 0.01f, 0.1f, "%.3f", ImGuiSliderFlags_Logarithmic);
             }
 
             // FPS values
@@ -1194,10 +910,9 @@ int main(void)
             ImGui::Text("Present: %.3f ms", profiling.present_ms);
             ImGui::Text("Frame:   %.3f ms", profiling.frame_ms);
 
-            ImGui::Text("Vertices:%d", terrainPointsNum);
-            ImGui::Text("Indices:%d", terrainMeshIndexBufferNum);
+            ImGui::Text("Vertices:%d", baked_heightmap_mesh.terrainPointsNum);
+            ImGui::Text("Indices:%d", baked_heightmap_mesh.terrainMeshIndexBufferNum);
 
-            
             if (gamepad)
             {
                 ImGui::Text("Gamepad Connected");
@@ -1303,7 +1018,7 @@ int main(void)
         static float strafeSpeed = 0.0f;
         strafeSpeed = inputMotionXAxis * deltaTime * debugBoostSpeed;
 
-        static v3 cameraPos = {(float)terrainDimInQuads, 100.0f, 0.0f};
+        static v3 cameraPos = {(float)baked_heightmap_mesh.terrainDimInQuads, 100.0f, 0.0f};
         cameraPos = cameraPos + (cameraForward * forwardSpeed);
         cameraPos = cameraPos + (cameraRight * strafeSpeed);
 
@@ -1380,9 +1095,9 @@ int main(void)
 
         // non bundle rendering
         renderState.commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        renderState.commandList->IASetVertexBuffers(0, 1, &vertexBufferView);
-        renderState.commandList->IASetIndexBuffer(&indexBufferView);
-        // renderState.commandList->DrawIndexedInstanced(terrainMeshIndexBufferNum, 1, 0, 0, 0);
+        renderState.commandList->IASetVertexBuffers(0, 1, &terrainMeshVertexBuffer.vertexBufferView);
+        renderState.commandList->IASetIndexBuffer(&terrainMeshIndexBuffer.indexBufferView);
+        // renderState.commandList->DrawIndexedInstanced(baked_heightmap_mesh.terrainMeshIndexBufferNum, 1, 0, 0, 0);
 
         // debugDrawOnlyChunk = programState.ticksElapsed % (chunkNumTotal);
 
@@ -1390,36 +1105,36 @@ int main(void)
         int baseDist = 0;
         if (newBaseDist != baseDist || 1)
         {
-            baseDist = newBaseDist;            
+            baseDist = newBaseDist;
             // extra lod when camera is high. TODO: should we even be doing this?
             // TODO: figure this out because this doesnt feel right
             float heightbasedLODMod = 1.0f;
             if (enableHeightLODMod && cameraPos.y > 0)
-            {                
-                heightbasedLODMod = SDL_clamp(heightbasedLODModScaler*sqrtf(cameraPos.y), 1.0f, 8.0f);                
+            {
+                heightbasedLODMod = SDL_clamp(heightbasedLODModScaler * sqrtf(cameraPos.y), 1.0f, 8.0f);
             }
-            for (int lod = 0; lod < maxLod; ++lod)
+            for (int lod = 0; lod < BakedConstants::maxLod; ++lod)
             {
                 drawDist[lod] = baseDist * (1 << lod) * heightbasedLODMod;
             }
         }
 
-        for (UINT i = 0; i < chunkNumTotal; ++i)
+        for (UINT i = 0; i < baked_heightmap_mesh.chunkNumTotal; ++i)
         {
 
-            UINT cx = (i % chunkNumDim) * chunkDimQuads;
-            UINT cy = (i / chunkNumDim) * chunkDimQuads;
+            UINT cx = (i % baked_heightmap_mesh.chunkNumDim) * baked_heightmap_mesh.chunkDimQuads;
+            UINT cy = (i / baked_heightmap_mesh.chunkNumDim) * baked_heightmap_mesh.chunkDimQuads;
             v3 pointEye = cameraPos;
             int distCx = (pointEye.x - (int)cx);
             int distCy = (pointEye.y - 0);
             int distCz = (pointEye.z - (int)cy);
             int squaredDist = distCx * distCx + distCy * distCy + distCz * distCz;
 
-            int desiredLod = (renderBeyondMaxRange) ? maxLod - 1 : -1; // -1 == cull
+            int desiredLod = (renderBeyondMaxRange) ? BakedConstants::maxLod - 1 : -1; // -1 == cull
 
             // TODO: somehow figure out how to cull when a chunk is well below the horizon
-            // mountains sticking up above horizon            
-            for (int j = 0; j < maxLod; ++j)
+            // mountains sticking up above horizon
+            for (int j = 0; j < BakedConstants::maxLod; ++j)
             {
                 if (squaredDist < drawDist[j] * drawDist[j])
                 {
@@ -1429,8 +1144,8 @@ int main(void)
             }
             if (desiredLod >= 0)
             {
-                UINT currentStartingIndex = lodRanges[i].startIndex[desiredLod] * 6U;
-                UINT numIndicesToDraw = lodRanges[i].numIndices[desiredLod] * 6U;
+                UINT currentStartingIndex = baked_heightmap_mesh.lodRanges[i].startIndex[desiredLod] * 6U;
+                UINT numIndicesToDraw = baked_heightmap_mesh.lodRanges[i].numIndices[desiredLod] * 6U;
                 renderState.commandList->DrawIndexedInstanced(numIndicesToDraw, 1, currentStartingIndex, 0, 0);
             }
         }
