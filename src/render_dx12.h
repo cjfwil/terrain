@@ -94,7 +94,7 @@ static struct
     ID3D12PipelineState *pipelineState = nullptr;
     ID3D12GraphicsCommandList *commandList = nullptr;
     ID3DBlob *vertexShader = nullptr;
-    ID3DBlob *pixelShader = nullptr;    
+    ID3DBlob *pixelShader = nullptr;
     ID3D12Resource *constantBuffer = nullptr;
 
     ID3D12GraphicsCommandList *bundle = nullptr;
@@ -182,11 +182,10 @@ struct d3d12_vertex_buffer
 struct d3d12_texture
 {
     ID3D12Resource *texture = nullptr;
-    wchar_t* filename;
-    bool create(wchar_t* _filename=L"gravel.dds", bool mipmaps=true)
-    {
-        // Load BC7 DDS (with baked mipmaps) using DirectXTex
+    wchar_t *filename;
 
+    bool create(wchar_t *_filename = L"gravel.dds", bool mipmaps = true)
+    {
         filename = _filename;
         DirectX::ScratchImage image;
         DirectX::TexMetadata metadata;
@@ -202,8 +201,13 @@ struct d3d12_texture
             return false;
         }
 
-        // Create GPU texture resource
+        // If mipmaps are disabled, override metadata
+        if (!mipmaps)
+        {
+            metadata.mipLevels = 1;
+        }
 
+        // Create GPU texture resource
         D3D12_RESOURCE_DESC textureDesc = {};
         textureDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
         textureDesc.Alignment = 0;
@@ -211,7 +215,7 @@ struct d3d12_texture
         textureDesc.Height = (UINT)metadata.height;
         textureDesc.DepthOrArraySize = (UINT16)metadata.arraySize;
         textureDesc.MipLevels = (UINT16)metadata.mipLevels;
-        textureDesc.Format = metadata.format; // DXGI_FORMAT_BC7_UNORM or BC7_UNORM_SRGB
+        textureDesc.Format = metadata.format;
         textureDesc.SampleDesc.Count = 1;
         textureDesc.SampleDesc.Quality = 0;
         textureDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
@@ -232,23 +236,36 @@ struct d3d12_texture
             return false;
         }
 
-        // Prepare subresources (DirectXTex gives correct BC7 pitches)
-
+        // Prepare subresources
         std::vector<D3D12_SUBRESOURCE_DATA> subresources;
-        subresources.reserve(image.GetImageCount());
 
         const DirectX::Image *imgs = image.GetImages();
-        for (size_t i = 0; i < image.GetImageCount(); ++i)
+
+        if (mipmaps)
         {
+            // Use all mip levels
+            subresources.reserve(image.GetImageCount());
+            for (size_t i = 0; i < image.GetImageCount(); ++i)
+            {
+                D3D12_SUBRESOURCE_DATA s = {};
+                s.pData = imgs[i].pixels;
+                s.RowPitch = imgs[i].rowPitch;
+                s.SlicePitch = imgs[i].slicePitch;
+                subresources.push_back(s);
+            }
+        }
+        else
+        {
+            // Only use mip 0
+            subresources.reserve(1);
             D3D12_SUBRESOURCE_DATA s = {};
-            s.pData = imgs[i].pixels;
-            s.RowPitch = (LONG_PTR)imgs[i].rowPitch;
-            s.SlicePitch = (LONG_PTR)imgs[i].slicePitch;
+            s.pData = imgs[0].pixels;
+            s.RowPitch = imgs[0].rowPitch;
+            s.SlicePitch = imgs[0].slicePitch;
             subresources.push_back(s);
         }
 
         // Create upload heap
-
         UINT64 uploadBufferSize =
             GetRequiredIntermediateSize(texture, 0, (UINT)subresources.size());
 
@@ -269,8 +286,7 @@ struct d3d12_texture
             return false;
         }
 
-        // Upload all mip levels
-
+        // Upload only the selected mip levels
         UpdateSubresources(
             renderState.commandList,
             texture,
@@ -289,9 +305,9 @@ struct d3d12_texture
         // Create SRV
         D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
         srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-        srvDesc.Format = metadata.format; // must match BC7 format
+        srvDesc.Format = metadata.format;
         srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-        srvDesc.Texture2D.MipLevels = (UINT)metadata.mipLevels;
+        srvDesc.Texture2D.MipLevels = mipmaps ? (UINT)metadata.mipLevels : 1;
 
         D3D12_CPU_DESCRIPTOR_HANDLE srvHandleCPU =
             renderState.srvHeap->GetCPUDescriptorHandleForHeapStart();
@@ -302,10 +318,10 @@ struct d3d12_texture
             &srvDesc,
             srvHandleCPU);
 
-        CD3DX12_RESOURCE_BARRIER commandListResourceBarrierTransitionPixelShader = CD3DX12_RESOURCE_BARRIER::Transition(texture, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        renderState.commandList->ResourceBarrier(1, &commandListResourceBarrierTransitionPixelShader);
 
-        renderState.device->CreateShaderResourceView(texture, &srvDesc, srvHandleCPU);
+        // TODO: Need proper allocator that releases and stuff after pending
+        // NOTE: CURRENT MEMORY LEAK BUT DONT UNCOMMENT THIS LINE IT CRASHES
+        // textureUploadHeap->Release();
         return true;
     }
 };

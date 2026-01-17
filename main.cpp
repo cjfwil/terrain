@@ -542,8 +542,15 @@ int main(void)
 
     // beginning of texture
     d3d12_texture gravelTexture;
-    if (!gravelTexture.create(L"gravel.dds")) {
+    if (!gravelTexture.create(L"gravel.dds"))
+    {
         err("Create Texture (gravelTexture) failed.");
+        return 1;
+    }
+
+    d3d12_texture heightmapTexture;
+    if (!heightmapTexture.create(L"heightmap.dds", false)) {
+        err("Create texture failed");
         return 1;
     }
     // end of texture
@@ -756,7 +763,7 @@ int main(void)
                         ImGui::GetIO().Framerate);
 
             // basic profiling
-            
+
             ImGui::SliderInt("LodDist", &newBaseDist, BakedHeightmeshConstants::chunkDimVerts, 512);
             static int planetScaleRatioDenom = 50;
             ImGui::SliderInt("Planet Scale 1:X", &planetScaleRatioDenom, 1, 100);
