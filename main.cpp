@@ -603,7 +603,9 @@ int main(void)
 
             // Apply height scale
             // TODO: calculate actual scale required automatically?
-            float heightScale = ((float)terrainDimInQuads * 0.071f);
+            const float swissAlps = 0.071f;
+            const float peloponessus = 0.021f;
+            float heightScale = ((float)terrainDimInQuads * peloponessus);
             float h = normalized * heightScale;
 
             heightmap[x + y * img_w] = h;
@@ -818,6 +820,7 @@ int main(void)
     // renderState.bundle->DrawInstanced(terrainMeshSizeInVertices, 1, 0, 0);
     renderState.bundle->Close();
 
+    // beginning of texture
     // Load BC7 DDS (with baked mipmaps) using DirectXTex
 
     DirectX::ScratchImage image;
@@ -1124,14 +1127,18 @@ int main(void)
         }
         programState.msElapsedSinceSDLInit = SDL_GetTicks();
 
-        static float debugBoostSpeed = 2.7778f;
+        static float debugBoostSpeed = 2.7778f; //same speed as average 16th century merchant vessel
         static int debugDrawOnlyChunk = 0;
+
+
         static int newBaseDist = 141;
         static int drawDist[maxLod] = {150, 300, 600, 1200, 2400, 4800};
         static bool renderBeyondMaxRange = false;
         
+        
+        // 0.091f is a nice value for 1080p with good performance on a 2k heightmap, but more for flying up into the atmosphere, doesnt have an effect when on top of mountains
+        static float heightbasedLODModScaler = 0.091f; // dont put this to zero or lower TODO: calculate appropriate min and max
         static bool enableHeightLODMod = false;
-        static float heightbasedLODModScaler = 1.0f; // minimum 1.0f
         
 
         if (enableImgui)
@@ -1154,7 +1161,7 @@ int main(void)
             ImGui::SliderInt("Planet Scale 1:X", &planetScaleRatioDenom, 1, 100);
             constantBufferData.planetScaleRatio = 1.0f / (float)planetScaleRatioDenom;
 
-            ImGui::SliderFloat("Debug Speed Boost", &debugBoostSpeed, 1.0f, 1000.0f);
+            ImGui::SliderFloat("Debug Speed Boost", &debugBoostSpeed, 1.0f, 1000.0f, "%.3f", ImGuiSliderFlags_Logarithmic);
 
             for (int i = 0; i < maxLod; ++i)
             {
@@ -1171,7 +1178,7 @@ int main(void)
             ImGui::Checkbox("Render beyond Max range", &renderBeyondMaxRange);
             ImGui::Checkbox("Boost terrain detail when camera is higher", &enableHeightLODMod);            
             if (enableHeightLODMod) {
-                ImGui::SliderFloat("Scaler", &heightbasedLODModScaler, 0.001f, 0.16f);                            
+                ImGui::SliderFloat("Scaler", &heightbasedLODModScaler, 0.01f, 0.1f, "%.3f", ImGuiSliderFlags_Logarithmic);                            
             }
 
             // FPS values
@@ -1387,9 +1394,9 @@ int main(void)
             // extra lod when camera is high. TODO: should we even be doing this?
             // TODO: figure this out because this doesnt feel right
             float heightbasedLODMod = 1.0f;
-            if (enableHeightLODMod)
+            if (enableHeightLODMod && cameraPos.y > 0)
             {                
-                heightbasedLODMod = SDL_clamp(heightbasedLODModScaler*sqrtf(cameraPos.y), 1.0f, 8.0f);
+                heightbasedLODMod = SDL_clamp(heightbasedLODModScaler*sqrtf(cameraPos.y), 1.0f, 8.0f);                
             }
             for (int lod = 0; lod < maxLod; ++lod)
             {
