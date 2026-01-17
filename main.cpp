@@ -138,7 +138,7 @@ struct DescriptorHeapAllocator
         HeapHandleIncrement = device->GetDescriptorHandleIncrementSize(HeapType);
         FreeIndices.reserve((int)desc.NumDescriptors);
         for (UINT n = desc.NumDescriptors; n > 0; n--)
-            FreeIndices.push_back(n - 1);
+            FreeIndices.push_back((int)n - 1);
     }
     void Destroy()
     {
@@ -599,8 +599,9 @@ int main(void)
 
             float normalized = (float)actualColour / 65535.0f;
 
-            // Apply your height scale
-            float heightScale = ((float)terrainDimInQuads * 0.066f);
+            // Apply height scale
+            // TODO: calculate actual scale required automatically?
+            float heightScale = ((float)terrainDimInQuads * 0.071f);
             float h = normalized * heightScale;
 
             heightmap[x + y * img_w] = h;
@@ -656,30 +657,44 @@ int main(void)
 
     const UINT vertexBufferSize = (UINT)terrainPointsSize;
 
+    const Uint32 indicesPerQuad = 6;
     struct quad_indices
     {
-        Uint32 indices[6];
+        Uint32 indices[indicesPerQuad];
     };
     int quadNum = (img_w - 1) * (img_h - 1);
     static size_t terrainMeshIndexBufferSize = (size_t)(quadNum * sizeof(quad_indices));
     static quad_indices *terrainMeshIndexBuffer = (quad_indices *)SDL_malloc((size_t)(terrainMeshIndexBufferSize));
-    static Uint32 terrainMeshIndexBufferNum = 6U * quadNum;
+    static Uint32 terrainMeshIndexBufferNum = indicesPerQuad * quadNum;
 
-    for (Uint32 y = 0; y < (Uint32)(img_h - 1); ++y)
+    const Uint32 chunkDimVerts = 64;
+    const Uint32 chunkNumDim = img_w/chunkDimVerts;
+    const Uint32 chunkDimQuads = chunkDimVerts-1;
+    Uint32 writeIndex = 0;
+    for (Uint32 cy = 0; cy < chunkNumDim; ++cy)
     {
-        for (Uint32 x = 0; x < (Uint32)(img_w - 1); ++x)
+        for (Uint32 cx = 0; cx < chunkNumDim; ++cx)
         {
-            Uint32 i = x + y * img_w;
+            for (Uint32 y = 0; y < chunkDimQuads; ++y)
+            {
+                for (Uint32 x = 0; x < chunkDimQuads; ++x)
+                {
+                    Uint32 chunkSpaceX = cx * chunkDimQuads;
+                    Uint32 chunkSpaceY = cy * chunkDimQuads;
 
-            quad_indices q = {};
-            q.indices[0] = i;
-            q.indices[1] = i + img_w;
-            q.indices[2] = i + img_w + 1;
-            q.indices[3] = i;
-            q.indices[4] = i + img_w + 1;
-            q.indices[5] = i + 1;
+                    Uint32 i = (chunkSpaceX + x) + (chunkSpaceY + y) * img_w;
 
-            terrainMeshIndexBuffer[x + y * (img_w - 1)] = q;
+                    quad_indices q = {};
+                    q.indices[0] = i;
+                    q.indices[1] = i + img_w;
+                    q.indices[2] = i + img_w + 1;
+                    q.indices[3] = i;
+                    q.indices[4] = i + img_w + 1;
+                    q.indices[5] = i + 1;
+
+                    terrainMeshIndexBuffer[writeIndex++] = q;
+                }
+            }
         }
     }
 
@@ -1090,6 +1105,7 @@ int main(void)
         }
         programState.msElapsedSinceSDLInit = SDL_GetTicks();
 
+        static int debugDrawOnlyChunk = 0;
         if (enableImgui)
         {
             ImGui_ImplDX12_NewFrame();
@@ -1103,6 +1119,8 @@ int main(void)
                         ImGui::GetIO().Framerate);
 
             // basic profiling
+
+            ImGui::SliderInt("Chunk", &debugDrawOnlyChunk, 0, chunkNumDim*chunkNumDim);
 
             uint64_t frameHistoryIndex = programState.ticksElapsed % 256;
             profiling.frameRateHistory[frameHistoryIndex] = ImGui::GetIO().Framerate;
@@ -1122,6 +1140,7 @@ int main(void)
             ImGui::Text("Frame:   %.3f ms", profiling.frame_ms);
 
             ImGui::Text("Vertices:%d", terrainPointsNum);
+            ImGui::Text("Indices:%d", terrainMeshIndexBufferNum);
 
             ImGui::Checkbox("VSync", &vsync);
             if (gamepad)
@@ -1229,7 +1248,7 @@ int main(void)
         static float strafeSpeed = 0.0f;
         strafeSpeed = inputMotionXAxis * deltaTime * boostSpeed;
 
-        static v3 cameraPos = {(float)terrainDimInQuads, 60.0f, 0.0f};
+        static v3 cameraPos = {(float)terrainDimInQuads, 100.0f, 0.0f};
         cameraPos = cameraPos + (cameraForward * forwardSpeed);
         cameraPos = cameraPos + (cameraRight * strafeSpeed);
 
@@ -1304,14 +1323,31 @@ int main(void)
         renderState.commandList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
 
         // non bundle rendering
-        // renderState.commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        // // renderState.commandList->IASetVertexBuffers(0, 1, &vertexBufferView);
-        // // renderState.commandList->DrawInstanced(terrainMeshSizeInVertices, 1, 0, 0);
-        // renderState.commandList->IASetIndexBuffer(&indexBufferView);
+        renderState.commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        renderState.commandList->IASetVertexBuffers(0, 1, &vertexBufferView);
+        renderState.commandList->IASetIndexBuffer(&indexBufferView);
         // renderState.commandList->DrawIndexedInstanced(terrainMeshIndexBufferNum, 1, 0, 0, 0);
 
+        
+        // debugDrawOnlyChunk = programState.ticksElapsed % (chunkNumDim * chunkNumDim);      
+        for (UINT i = 0; i < chunkNumDim * chunkNumDim; ++i)
+        {            
+            UINT numIndicesToDraw = chunkDimQuads * chunkDimQuads * indicesPerQuad; //6U 
+            UINT currentStartingIndex = numIndicesToDraw * i;            
+
+            UINT cx = (i % chunkNumDim)*chunkDimQuads;
+            UINT cy = (i / chunkNumDim)*chunkDimQuads;
+            int distCx = (cameraPos.x - (int)cx);
+            int distCy = (cameraPos.z - (int)cy);
+            int squaredDist = distCx*distCx + distCy*distCy;
+            int drawDist = 150;
+            if (squaredDist < drawDist*drawDist) {
+                renderState.commandList->DrawIndexedInstanced(numIndicesToDraw, 1, currentStartingIndex, 0, 0);
+            }
+        }
+
         // bundle rendering
-        renderState.commandList->ExecuteBundle(renderState.bundle);
+        // renderState.commandList->ExecuteBundle(renderState.bundle);
 
         if (enableImgui)
             ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), renderState.commandList);

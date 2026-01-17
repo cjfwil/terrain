@@ -44,29 +44,28 @@ float3 SmoothNormal(float3 worldPos)
 }
 
 
-float4 PSMain(VSOut IN) : SV_Target
-{
-    const float3 lightDir = normalize(float3(0.5f, -1.0f, 0.2f));
-    const float3 lightColor = float3(1.0f, 0.98f, 0.9f);
-    const float ambient = 0.2f;
-
-    float4 albedo = g_texture.Sample(g_sampler, IN.uv);
-
-    float3 N = normalize(IN.normalWS);
-
-    float diff = saturate(dot(N, -lightDir));
-    float3 lit = (ambient + diff * 0.8f) * lightColor;
-
-    return float4(lit * albedo.rgb, albedo.a);
-}
-
 // float4 PSMain(VSOut IN) : SV_Target
 // {
-//     // Use the world‑space normal passed from the vertex shader
+//     const float3 lightDir = normalize(float3(0.5f, -1.0f, 0.2f));
+//     const float3 lightColor = float3(1.0f, 0.98f, 0.9f);
+//     const float ambient = 0.2f;
+
+//     float4 albedo = g_texture.Sample(g_sampler, IN.uv);
+
 //     float3 N = normalize(IN.normalWS);
 
-//     // Map from [-1,1] to [0,1]
-//     float3 color = N * 0.5f + 0.5f;
+//     float diff = saturate(dot(N, -lightDir));
+//     float3 lit = (ambient + diff * 0.8f) * lightColor;
 
-//     return float4(color, 1.0f);
+//     return float4(lit * albedo.rgb, albedo.a);
 // }
+
+float4 PSMain(VSOut IN) : SV_Target
+{    
+    float3 N = normalize(IN.normalWS);
+
+    // Map from [-1,1] to [0,1]
+    float3 color = N * 0.5f + 0.5f;
+
+    return float4(color, 1.0f);
+}

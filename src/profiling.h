@@ -10,19 +10,23 @@ float qpc_ms(LARGE_INTEGER a, LARGE_INTEGER b)
 struct
 {
     LARGE_INTEGER t0, t1, t2, t3;
-    static const int count = 256;
-    float frameRateHistory[count] = {};
+
     float fps_1pct_low;
     float fps_01pct_low;
     float fps_peak;
     float fps_min;
     float fps_max;
-
+    
     float update_ms;
     float render_ms;
     float present_ms;
     float frame_ms;
+    
+    static const int count = 256;
+    float frameRateHistory[count] = {};
 
+    
+    
 
     void update_fps()
     {
