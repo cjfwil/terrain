@@ -176,6 +176,8 @@ static struct
     DirectX::XMFLOAT4X4 world;
     DirectX::XMFLOAT4X4 view; // 4 x 4 matrix has 16 entries. 4 bytes per entry -> 64 bytes total
     DirectX::XMFLOAT4X4 projection;
+    DirectX::XMVECTOR cameraPos;
+    float planetScaleRatio = 1.0f / 75.0f;
 } constantBufferData;
 
 static struct
@@ -538,7 +540,7 @@ int main(void)
             {"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 20, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0}};
 
     D3D12_RASTERIZER_DESC rasterizerDesc = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
-    rasterizerDesc.FillMode = D3D12_FILL_MODE_WIREFRAME;
+    // rasterizerDesc.FillMode = D3D12_FILL_MODE_WIREFRAME;
     // rasterizerDesc.CullMode = D3D12_CULL_MODE_NONE; // Disable culling (backface culling)
 
     D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
@@ -628,7 +630,7 @@ int main(void)
             // v.texCoords.x = (x % 2 == 0) ? 0.0f : 1.0f;
             // v.texCoords.y = (y % 2 == 0) ? 0.0f : 1.0f;
 
-            float tile = 512.0f;
+            float tile = (float)img_w;
             v.texCoords.x = ((float)x / (float)(img_w - 1)) * tile;
             v.texCoords.y = ((float)y / (float)(img_h - 1)) * tile;
 
@@ -663,37 +665,54 @@ int main(void)
         Uint32 indices[indicesPerQuad];
     };
     int quadNum = (img_w - 1) * (img_h - 1);
-    static size_t terrainMeshIndexBufferSize = (size_t)(quadNum * sizeof(quad_indices));
-    static quad_indices *terrainMeshIndexBuffer = (quad_indices *)SDL_malloc((size_t)(terrainMeshIndexBufferSize));
+    static size_t terrainMeshIndexBufferSize = (size_t)(quadNum * sizeof(quad_indices) * 2); // TODO: calculate and alloc correct amount of space, we are doing double for now just because that is enough
     static Uint32 terrainMeshIndexBufferNum = indicesPerQuad * quadNum;
 
     const Uint32 chunkDimVerts = 64;
-    const Uint32 chunkNumDim = img_w/chunkDimVerts;
-    const Uint32 chunkDimQuads = chunkDimVerts-1;
+    const Uint32 chunkNumDim = img_w / chunkDimVerts;
+    const Uint32 chunkNumTotal = chunkNumDim * chunkNumDim;
+    const Uint32 chunkDimQuads = chunkDimVerts - 1;
     Uint32 writeIndex = 0;
-    for (Uint32 cy = 0; cy < chunkNumDim; ++cy)
+    const Uint32 maxLod = 6; // no higher than 6 for 64x64
+
+    struct lod_range
     {
-        for (Uint32 cx = 0; cx < chunkNumDim; ++cx)
+        Uint32 startIndex[maxLod] = {};
+        Uint32 numIndices[maxLod] = {};
+    };
+
+    lod_range *lodRanges = (lod_range *)SDL_malloc((size_t)(chunkNumTotal * sizeof(lod_range)));
+    static quad_indices *terrainMeshIndexBuffer = (quad_indices *)SDL_malloc((size_t)(terrainMeshIndexBufferSize));
+    for (Uint32 lod = 0; lod < maxLod; ++lod)
+    {
+        Uint32 lodStep = 1U << lod; // 2 to the power of lod
+        for (Uint32 cy = 0; cy < chunkNumDim; ++cy)
         {
-            for (Uint32 y = 0; y < chunkDimQuads; ++y)
+            for (Uint32 cx = 0; cx < chunkNumDim; ++cx)
             {
-                for (Uint32 x = 0; x < chunkDimQuads; ++x)
+                Uint32 currentLodStart = writeIndex;
+                lodRanges[cx + cy * chunkNumDim].startIndex[lod] = currentLodStart;
+                for (Uint32 y = 0; y < chunkDimQuads; y += lodStep)
                 {
-                    Uint32 chunkSpaceX = cx * chunkDimQuads;
-                    Uint32 chunkSpaceY = cy * chunkDimQuads;
+                    for (Uint32 x = 0; x < chunkDimQuads; x += lodStep)
+                    {
+                        Uint32 chunkSpaceX = cx * chunkDimQuads;
+                        Uint32 chunkSpaceY = cy * chunkDimQuads;
 
-                    Uint32 i = (chunkSpaceX + x) + (chunkSpaceY + y) * img_w;
+                        Uint32 i = (chunkSpaceX + x) + (chunkSpaceY + y) * img_w;
 
-                    quad_indices q = {};
-                    q.indices[0] = i;
-                    q.indices[1] = i + img_w;
-                    q.indices[2] = i + img_w + 1;
-                    q.indices[3] = i;
-                    q.indices[4] = i + img_w + 1;
-                    q.indices[5] = i + 1;
+                        quad_indices q = {};
+                        q.indices[0] = i;
+                        q.indices[1] = i + img_w * lodStep;
+                        q.indices[2] = i + img_w * lodStep + lodStep;
+                        q.indices[3] = i;
+                        q.indices[4] = i + img_w * lodStep + lodStep;
+                        q.indices[5] = i + lodStep;
 
-                    terrainMeshIndexBuffer[writeIndex++] = q;
+                        terrainMeshIndexBuffer[writeIndex++] = q;
+                    }
                 }
+                lodRanges[cx + cy * chunkNumDim].numIndices[lod] = writeIndex - currentLodStart;
             }
         }
     }
@@ -1105,7 +1124,16 @@ int main(void)
         }
         programState.msElapsedSinceSDLInit = SDL_GetTicks();
 
+        static float debugBoostSpeed = 2.7778f;
         static int debugDrawOnlyChunk = 0;
+        static int newBaseDist = 141;
+        static int drawDist[maxLod] = {150, 300, 600, 1200, 2400, 4800};
+        static bool renderBeyondMaxRange = false;
+        
+        static bool enableHeightLODMod = false;
+        static float heightbasedLODModScaler = 1.0f; // minimum 1.0f
+        
+
         if (enableImgui)
         {
             ImGui_ImplDX12_NewFrame();
@@ -1120,11 +1148,31 @@ int main(void)
 
             // basic profiling
 
-            ImGui::SliderInt("Chunk", &debugDrawOnlyChunk, 0, chunkNumDim*chunkNumDim);
+            ImGui::SliderInt("Chunk", &debugDrawOnlyChunk, 0, chunkNumTotal);
+            ImGui::SliderInt("LodDist", &newBaseDist, chunkDimVerts, 512);
+            static int planetScaleRatioDenom = 50;
+            ImGui::SliderInt("Planet Scale 1:X", &planetScaleRatioDenom, 1, 100);
+            constantBufferData.planetScaleRatio = 1.0f / (float)planetScaleRatioDenom;
+
+            ImGui::SliderFloat("Debug Speed Boost", &debugBoostSpeed, 1.0f, 1000.0f);
+
+            for (int i = 0; i < maxLod; ++i)
+            {
+                ImGui::Text("LOD%d: %d", i, drawDist[i]);
+            }
 
             uint64_t frameHistoryIndex = programState.ticksElapsed % 256;
             profiling.frameRateHistory[frameHistoryIndex] = ImGui::GetIO().Framerate;
             ImGui::PlotLines("Frametime", profiling.frameRateHistory, IM_ARRAYSIZE(profiling.frameRateHistory), (int)frameHistoryIndex);
+
+
+            // options
+            ImGui::Checkbox("VSync", &vsync);
+            ImGui::Checkbox("Render beyond Max range", &renderBeyondMaxRange);
+            ImGui::Checkbox("Boost terrain detail when camera is higher", &enableHeightLODMod);            
+            if (enableHeightLODMod) {
+                ImGui::SliderFloat("Scaler", &heightbasedLODModScaler, 0.001f, 0.16f);                            
+            }
 
             // FPS values
             profiling.update_fps();
@@ -1142,7 +1190,7 @@ int main(void)
             ImGui::Text("Vertices:%d", terrainPointsNum);
             ImGui::Text("Indices:%d", terrainMeshIndexBufferNum);
 
-            ImGui::Checkbox("VSync", &vsync);
+            
             if (gamepad)
             {
                 ImGui::Text("Gamepad Connected");
@@ -1243,10 +1291,10 @@ int main(void)
         v3 cameraUp = v3::cross(cameraRight, cameraForward);
 
         static float forwardSpeed = 0.0f;
-        static float boostSpeed = 50.0f;
-        forwardSpeed = inputMotionYAxis * deltaTime * boostSpeed;
+
+        forwardSpeed = inputMotionYAxis * deltaTime * debugBoostSpeed;
         static float strafeSpeed = 0.0f;
-        strafeSpeed = inputMotionXAxis * deltaTime * boostSpeed;
+        strafeSpeed = inputMotionXAxis * deltaTime * debugBoostSpeed;
 
         static v3 cameraPos = {(float)terrainDimInQuads, 100.0f, 0.0f};
         cameraPos = cameraPos + (cameraForward * forwardSpeed);
@@ -1260,6 +1308,7 @@ int main(void)
         DirectX::XMMATRIX world = DirectX::XMMatrixIdentity();
 
         DirectX::XMVECTOR eye = DirectX::XMVectorSet(cameraPos.x, cameraPos.y, cameraPos.z, 0.0f);
+        constantBufferData.cameraPos = eye;
         DirectX::XMVECTOR at = DirectX::XMVectorSet(atPos.x, atPos.y, atPos.z, 0.0f);
         DirectX::XMVECTOR up = DirectX::XMVectorSet(cameraUp.x, cameraUp.y, cameraUp.z, 0.0f);
         DirectX::XMMATRIX view = DirectX::XMMatrixLookAtLH(eye, at, up);
@@ -1267,7 +1316,7 @@ int main(void)
 
         float fov = DirectX::XMConvertToRadians(60.0f);
         float nearZ = 0.1f;
-        float farZ = 2000.0f;
+        float farZ = 9999999.0f; // TODO: change to infinite far plane???
         DirectX::XMMATRIX projection = DirectX::XMMatrixPerspectiveFovLH(fov, aspectRatio, nearZ, farZ);
         // DirectX::XMMATRIX projection = DirectX::XMMatrixOrthographicLH(2.0f, 2.0f, 0.1f, 100.0f);
 
@@ -1328,20 +1377,53 @@ int main(void)
         renderState.commandList->IASetIndexBuffer(&indexBufferView);
         // renderState.commandList->DrawIndexedInstanced(terrainMeshIndexBufferNum, 1, 0, 0, 0);
 
-        
-        // debugDrawOnlyChunk = programState.ticksElapsed % (chunkNumDim * chunkNumDim);      
-        for (UINT i = 0; i < chunkNumDim * chunkNumDim; ++i)
-        {            
-            UINT numIndicesToDraw = chunkDimQuads * chunkDimQuads * indicesPerQuad; //6U 
-            UINT currentStartingIndex = numIndicesToDraw * i;            
+        // debugDrawOnlyChunk = programState.ticksElapsed % (chunkNumTotal);
 
-            UINT cx = (i % chunkNumDim)*chunkDimQuads;
-            UINT cy = (i / chunkNumDim)*chunkDimQuads;
-            int distCx = (cameraPos.x - (int)cx);
-            int distCy = (cameraPos.z - (int)cy);
-            int squaredDist = distCx*distCx + distCy*distCy;
-            int drawDist = 150;
-            if (squaredDist < drawDist*drawDist) {
+        // for live tweaking of LOD distance
+        int baseDist = 0;
+        if (newBaseDist != baseDist || 1)
+        {
+            baseDist = newBaseDist;            
+            // extra lod when camera is high. TODO: should we even be doing this?
+            // TODO: figure this out because this doesnt feel right
+            float heightbasedLODMod = 1.0f;
+            if (enableHeightLODMod)
+            {                
+                heightbasedLODMod = SDL_clamp(heightbasedLODModScaler*sqrtf(cameraPos.y), 1.0f, 8.0f);
+            }
+            for (int lod = 0; lod < maxLod; ++lod)
+            {
+                drawDist[lod] = baseDist * (1 << lod) * heightbasedLODMod;
+            }
+        }
+
+        for (UINT i = 0; i < chunkNumTotal; ++i)
+        {
+
+            UINT cx = (i % chunkNumDim) * chunkDimQuads;
+            UINT cy = (i / chunkNumDim) * chunkDimQuads;
+            v3 pointEye = cameraPos;
+            int distCx = (pointEye.x - (int)cx);
+            int distCy = (pointEye.y - 0);
+            int distCz = (pointEye.z - (int)cy);
+            int squaredDist = distCx * distCx + distCy * distCy + distCz * distCz;
+
+            int desiredLod = (renderBeyondMaxRange) ? maxLod - 1 : -1; // -1 == cull
+
+            // TODO: somehow figure out how to cull when a chunk is well below the horizon
+            // mountains sticking up above horizon            
+            for (int j = 0; j < maxLod; ++j)
+            {
+                if (squaredDist < drawDist[j] * drawDist[j])
+                {
+                    desiredLod = j;
+                    break;
+                }
+            }
+            if (desiredLod >= 0)
+            {
+                UINT currentStartingIndex = lodRanges[i].startIndex[desiredLod] * 6U;
+                UINT numIndicesToDraw = lodRanges[i].numIndices[desiredLod] * 6U;
                 renderState.commandList->DrawIndexedInstanced(numIndicesToDraw, 1, currentStartingIndex, 0, 0);
             }
         }
@@ -1372,6 +1454,8 @@ int main(void)
         if (FAILED(hr))
         {
             errhr("Present failed", hr);
+            hr = renderState.device->GetDeviceRemovedReason();
+            errhr("GetDeviceRemovedReason: ", hr);
             return 1;
         }
 
