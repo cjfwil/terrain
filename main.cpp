@@ -270,8 +270,8 @@ int main(void)
     // Initialize ImGui allocator
     renderState.imguiSrvAllocator.Create(renderState.device, renderState.imguiSrvHeap);
 
-    UINT cbvSrvDescriptorSize = renderState.device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-    UINT rtvDescriptorSize = renderState.device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+    renderState.cbvSrvDescriptorSize = renderState.device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    renderState.rtvDescriptorSize = renderState.device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
 
     // create frame resources
     CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandleSetup(renderState.rtvHeap->GetCPUDescriptorHandleForHeapStart());
@@ -286,7 +286,7 @@ int main(void)
             return 1;
         }
         renderState.device->CreateRenderTargetView(renderState.renderTargets[n], nullptr, rtvHandleSetup);
-        rtvHandleSetup.Offset(1, rtvDescriptorSize);
+        rtvHandleSetup.Offset(1, renderState.rtvDescriptorSize);
 
         hr = renderState.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&renderState.commandAllocators[n]));
         if (FAILED(hr))
@@ -541,126 +541,11 @@ int main(void)
     renderState.bundle->Close();
 
     // beginning of texture
-    // Load BC7 DDS (with baked mipmaps) using DirectXTex
-
-    DirectX::ScratchImage image;
-    DirectX::TexMetadata metadata;
-
-    hr = DirectX::LoadFromDDSFile(
-        L"gravel.dds",
-        DirectX::DDS_FLAGS_NONE,
-        &metadata,
-        image);
-    if (FAILED(hr))
-    {
-        errhr("LoadFromDDSFile failed", hr);
+    d3d12_texture gravelTexture;
+    if (!gravelTexture.create(L"gravel.dds")) {
+        err("Create Texture (gravelTexture) failed.");
         return 1;
     }
-
-    // Create GPU texture resource
-
-    D3D12_RESOURCE_DESC textureDesc = {};
-    textureDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-    textureDesc.Alignment = 0;
-    textureDesc.Width = (UINT)metadata.width;
-    textureDesc.Height = (UINT)metadata.height;
-    textureDesc.DepthOrArraySize = (UINT16)metadata.arraySize;
-    textureDesc.MipLevels = (UINT16)metadata.mipLevels;
-    textureDesc.Format = metadata.format; // DXGI_FORMAT_BC7_UNORM or BC7_UNORM_SRGB
-    textureDesc.SampleDesc.Count = 1;
-    textureDesc.SampleDesc.Quality = 0;
-    textureDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-    textureDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
-
-    CD3DX12_HEAP_PROPERTIES heapPropsDefault(D3D12_HEAP_TYPE_DEFAULT);
-
-    hr = renderState.device->CreateCommittedResource(
-        &heapPropsDefault,
-        D3D12_HEAP_FLAG_NONE,
-        &textureDesc,
-        D3D12_RESOURCE_STATE_COPY_DEST,
-        nullptr,
-        IID_PPV_ARGS(&renderState.texture));
-    if (FAILED(hr))
-    {
-        errhr("CreateCommittedResource (texture)", hr);
-        return 1;
-    }
-
-    // Prepare subresources (DirectXTex gives correct BC7 pitches)
-
-    std::vector<D3D12_SUBRESOURCE_DATA> subresources;
-    subresources.reserve(image.GetImageCount());
-
-    const DirectX::Image *imgs = image.GetImages();
-    for (size_t i = 0; i < image.GetImageCount(); ++i)
-    {
-        D3D12_SUBRESOURCE_DATA s = {};
-        s.pData = imgs[i].pixels;
-        s.RowPitch = (LONG_PTR)imgs[i].rowPitch;
-        s.SlicePitch = (LONG_PTR)imgs[i].slicePitch;
-        subresources.push_back(s);
-    }
-
-    // Create upload heap
-
-    UINT64 uploadBufferSize =
-        GetRequiredIntermediateSize(renderState.texture, 0, (UINT)subresources.size());
-
-    // CD3DX12_HEAP_PROPERTIES heapPropsUpload(D3D12_HEAP_TYPE_UPLOAD);
-    auto uploadDesc = CD3DX12_RESOURCE_DESC::Buffer(uploadBufferSize);
-
-    ID3D12Resource *textureUploadHeap = nullptr;
-    hr = renderState.device->CreateCommittedResource(
-        &heapPropsUpload,
-        D3D12_HEAP_FLAG_NONE,
-        &uploadDesc,
-        D3D12_RESOURCE_STATE_GENERIC_READ,
-        nullptr,
-        IID_PPV_ARGS(&textureUploadHeap));
-    if (FAILED(hr))
-    {
-        errhr("CreateCommittedResource (upload buffer)", hr);
-        return 1;
-    }
-
-    // Upload all mip levels
-
-    UpdateSubresources(
-        renderState.commandList,
-        renderState.texture,
-        textureUploadHeap,
-        0, 0,
-        (UINT)subresources.size(),
-        subresources.data());
-
-    // Transition to shader resource
-    auto barrier = CD3DX12_RESOURCE_BARRIER::Transition(
-        renderState.texture,
-        D3D12_RESOURCE_STATE_COPY_DEST,
-        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-    renderState.commandList->ResourceBarrier(1, &barrier);
-
-    // Create SRV
-    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    srvDesc.Format = metadata.format; // must match BC7 format
-    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-    srvDesc.Texture2D.MipLevels = (UINT)metadata.mipLevels;
-
-    D3D12_CPU_DESCRIPTOR_HANDLE srvHandleCPU =
-        renderState.srvHeap->GetCPUDescriptorHandleForHeapStart();
-    srvHandleCPU.ptr += cbvSrvDescriptorSize;
-
-    renderState.device->CreateShaderResourceView(
-        renderState.texture,
-        &srvDesc,
-        srvHandleCPU);
-
-    CD3DX12_RESOURCE_BARRIER commandListResourceBarrierTransitionPixelShader = CD3DX12_RESOURCE_BARRIER::Transition(renderState.texture, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-    renderState.commandList->ResourceBarrier(1, &commandListResourceBarrierTransitionPixelShader);
-
-    renderState.device->CreateShaderResourceView(renderState.texture, &srvDesc, srvHandleCPU);
     // end of texture
 
     renderState.commandList->Close();
@@ -851,7 +736,7 @@ int main(void)
         static int debugDrawOnlyChunk = 0;
 
         static int newBaseDist = 141;
-        static int drawDist[BakedConstants::maxLod] = {150, 300, 600, 1200, 2400, 4800};
+        static int drawDist[BakedHeightmeshConstants::maxLod] = {150, 300, 600, 1200, 2400, 4800};
         static bool renderBeyondMaxRange = false;
 
         // 0.091f is a nice value for 1080p with good performance on a 2k heightmap, but more for flying up into the atmosphere, doesnt have an effect when on top of mountains
@@ -872,14 +757,14 @@ int main(void)
 
             // basic profiling
             
-            ImGui::SliderInt("LodDist", &newBaseDist, BakedConstants::chunkDimVerts, 512);
+            ImGui::SliderInt("LodDist", &newBaseDist, BakedHeightmeshConstants::chunkDimVerts, 512);
             static int planetScaleRatioDenom = 50;
             ImGui::SliderInt("Planet Scale 1:X", &planetScaleRatioDenom, 1, 100);
             constantBufferData.planetScaleRatio = 1.0f / (float)planetScaleRatioDenom;
 
             ImGui::SliderFloat("Debug Speed Boost", &debugBoostSpeed, 1.0f, 1000.0f, "%.3f", ImGuiSliderFlags_Logarithmic);
 
-            for (int i = 0; i < BakedConstants::maxLod; ++i)
+            for (int i = 0; i < BakedHeightmeshConstants::maxLod; ++i)
             {
                 ImGui::Text("LOD%d: %d", i, drawDist[i]);
             }
@@ -1074,7 +959,7 @@ int main(void)
         renderState.commandList->SetGraphicsRootDescriptorTable(0, renderState.srvHeap->GetGPUDescriptorHandleForHeapStart()); // CBV
 
         D3D12_GPU_DESCRIPTOR_HANDLE srvHandleGPU = renderState.srvHeap->GetGPUDescriptorHandleForHeapStart();
-        srvHandleGPU.ptr += cbvSrvDescriptorSize;
+        srvHandleGPU.ptr += renderState.cbvSrvDescriptorSize;
         renderState.commandList->SetGraphicsRootDescriptorTable(1, srvHandleGPU);
         renderState.commandList->RSSetViewports(1, &viewport);
         renderState.commandList->RSSetScissorRects(1, &scissorRect);
@@ -1082,7 +967,7 @@ int main(void)
         CD3DX12_RESOURCE_BARRIER commandListResourceBarrierTransitionRenderTarget = CD3DX12_RESOURCE_BARRIER::Transition(renderState.renderTargets[frameIndex], D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
         renderState.commandList->ResourceBarrier(1, &commandListResourceBarrierTransitionRenderTarget);
 
-        CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandlePerFrame(renderState.rtvHeap->GetCPUDescriptorHandleForHeapStart(), (INT)frameIndex, rtvDescriptorSize);
+        CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandlePerFrame(renderState.rtvHeap->GetCPUDescriptorHandleForHeapStart(), (INT)frameIndex, renderState.rtvDescriptorSize);
         renderState.commandList->OMSetRenderTargets(1, &rtvHandlePerFrame, FALSE, nullptr);
 
         CD3DX12_CPU_DESCRIPTOR_HANDLE dsvHandle(renderState.dsvHeap->GetCPUDescriptorHandleForHeapStart());
@@ -1113,7 +998,7 @@ int main(void)
             {
                 heightbasedLODMod = SDL_clamp(heightbasedLODModScaler * sqrtf(cameraPos.y), 1.0f, 8.0f);
             }
-            for (int lod = 0; lod < BakedConstants::maxLod; ++lod)
+            for (int lod = 0; lod < BakedHeightmeshConstants::maxLod; ++lod)
             {
                 drawDist[lod] = baseDist * (1 << lod) * heightbasedLODMod;
             }
@@ -1130,11 +1015,11 @@ int main(void)
             int distCz = (pointEye.z - (int)cy);
             int squaredDist = distCx * distCx + distCy * distCy + distCz * distCz;
 
-            int desiredLod = (renderBeyondMaxRange) ? BakedConstants::maxLod - 1 : -1; // -1 == cull
+            int desiredLod = (renderBeyondMaxRange) ? BakedHeightmeshConstants::maxLod - 1 : -1; // -1 == cull
 
             // TODO: somehow figure out how to cull when a chunk is well below the horizon
             // mountains sticking up above horizon
-            for (int j = 0; j < BakedConstants::maxLod; ++j)
+            for (int j = 0; j < BakedHeightmeshConstants::maxLod; ++j)
             {
                 if (squaredDist < drawDist[j] * drawDist[j])
                 {

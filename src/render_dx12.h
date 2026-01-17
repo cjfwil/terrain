@@ -94,20 +94,21 @@ static struct
     ID3D12PipelineState *pipelineState = nullptr;
     ID3D12GraphicsCommandList *commandList = nullptr;
     ID3DBlob *vertexShader = nullptr;
-    ID3DBlob *pixelShader = nullptr;
-    ID3D12Resource *texture = nullptr;
+    ID3DBlob *pixelShader = nullptr;    
     ID3D12Resource *constantBuffer = nullptr;
 
     ID3D12GraphicsCommandList *bundle = nullptr;
     const DXGI_FORMAT rtvFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
 
+    UINT cbvSrvDescriptorSize = 0;
+    UINT rtvDescriptorSize = 0;
     // end of init
 } renderState;
 
 struct d3d12_index_buffer
 {
     D3D12_INDEX_BUFFER_VIEW indexBufferView = {};
-    ID3D12Resource *indexBuffer = nullptr;    
+    ID3D12Resource *indexBuffer = nullptr;
     bool create_and_upload(size_t indexBufferSize, void *indexBufferData)
     {
         CD3DX12_HEAP_PROPERTIES heapPropsUpload(D3D12_HEAP_TYPE_UPLOAD);
@@ -141,7 +142,6 @@ struct d3d12_index_buffer
 
 struct d3d12_vertex_buffer
 {
-
     D3D12_VERTEX_BUFFER_VIEW vertexBufferView;
     ID3D12Resource *vertexBuffer = nullptr;
 
@@ -175,6 +175,137 @@ struct d3d12_vertex_buffer
         vertexBufferView.BufferLocation = vertexBuffer->GetGPUVirtualAddress();
         vertexBufferView.StrideInBytes = sizeof(vertex);
         vertexBufferView.SizeInBytes = vertexBufferSize;
+        return true;
+    }
+};
+
+struct d3d12_texture
+{
+    ID3D12Resource *texture = nullptr;
+    wchar_t* filename;
+    bool create(wchar_t* _filename=L"gravel.dds", bool mipmaps=true)
+    {
+        // Load BC7 DDS (with baked mipmaps) using DirectXTex
+
+        filename = _filename;
+        DirectX::ScratchImage image;
+        DirectX::TexMetadata metadata;
+
+        HRESULT hr = DirectX::LoadFromDDSFile(
+            filename,
+            DirectX::DDS_FLAGS_NONE,
+            &metadata,
+            image);
+        if (FAILED(hr))
+        {
+            errhr("LoadFromDDSFile failed", hr);
+            return false;
+        }
+
+        // Create GPU texture resource
+
+        D3D12_RESOURCE_DESC textureDesc = {};
+        textureDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        textureDesc.Alignment = 0;
+        textureDesc.Width = (UINT)metadata.width;
+        textureDesc.Height = (UINT)metadata.height;
+        textureDesc.DepthOrArraySize = (UINT16)metadata.arraySize;
+        textureDesc.MipLevels = (UINT16)metadata.mipLevels;
+        textureDesc.Format = metadata.format; // DXGI_FORMAT_BC7_UNORM or BC7_UNORM_SRGB
+        textureDesc.SampleDesc.Count = 1;
+        textureDesc.SampleDesc.Quality = 0;
+        textureDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+        textureDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
+
+        CD3DX12_HEAP_PROPERTIES heapPropsDefault(D3D12_HEAP_TYPE_DEFAULT);
+
+        hr = renderState.device->CreateCommittedResource(
+            &heapPropsDefault,
+            D3D12_HEAP_FLAG_NONE,
+            &textureDesc,
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            nullptr,
+            IID_PPV_ARGS(&texture));
+        if (FAILED(hr))
+        {
+            errhr("CreateCommittedResource (texture)", hr);
+            return false;
+        }
+
+        // Prepare subresources (DirectXTex gives correct BC7 pitches)
+
+        std::vector<D3D12_SUBRESOURCE_DATA> subresources;
+        subresources.reserve(image.GetImageCount());
+
+        const DirectX::Image *imgs = image.GetImages();
+        for (size_t i = 0; i < image.GetImageCount(); ++i)
+        {
+            D3D12_SUBRESOURCE_DATA s = {};
+            s.pData = imgs[i].pixels;
+            s.RowPitch = (LONG_PTR)imgs[i].rowPitch;
+            s.SlicePitch = (LONG_PTR)imgs[i].slicePitch;
+            subresources.push_back(s);
+        }
+
+        // Create upload heap
+
+        UINT64 uploadBufferSize =
+            GetRequiredIntermediateSize(texture, 0, (UINT)subresources.size());
+
+        CD3DX12_HEAP_PROPERTIES heapPropsUpload(D3D12_HEAP_TYPE_UPLOAD);
+        auto uploadDesc = CD3DX12_RESOURCE_DESC::Buffer(uploadBufferSize);
+
+        ID3D12Resource *textureUploadHeap = nullptr;
+        hr = renderState.device->CreateCommittedResource(
+            &heapPropsUpload,
+            D3D12_HEAP_FLAG_NONE,
+            &uploadDesc,
+            D3D12_RESOURCE_STATE_GENERIC_READ,
+            nullptr,
+            IID_PPV_ARGS(&textureUploadHeap));
+        if (FAILED(hr))
+        {
+            errhr("CreateCommittedResource (upload buffer)", hr);
+            return false;
+        }
+
+        // Upload all mip levels
+
+        UpdateSubresources(
+            renderState.commandList,
+            texture,
+            textureUploadHeap,
+            0, 0,
+            (UINT)subresources.size(),
+            subresources.data());
+
+        // Transition to shader resource
+        auto barrier = CD3DX12_RESOURCE_BARRIER::Transition(
+            texture,
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        renderState.commandList->ResourceBarrier(1, &barrier);
+
+        // Create SRV
+        D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+        srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srvDesc.Format = metadata.format; // must match BC7 format
+        srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        srvDesc.Texture2D.MipLevels = (UINT)metadata.mipLevels;
+
+        D3D12_CPU_DESCRIPTOR_HANDLE srvHandleCPU =
+            renderState.srvHeap->GetCPUDescriptorHandleForHeapStart();
+        srvHandleCPU.ptr += renderState.cbvSrvDescriptorSize;
+
+        renderState.device->CreateShaderResourceView(
+            texture,
+            &srvDesc,
+            srvHandleCPU);
+
+        CD3DX12_RESOURCE_BARRIER commandListResourceBarrierTransitionPixelShader = CD3DX12_RESOURCE_BARRIER::Transition(texture, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        renderState.commandList->ResourceBarrier(1, &commandListResourceBarrierTransitionPixelShader);
+
+        renderState.device->CreateShaderResourceView(texture, &srvDesc, srvHandleCPU);
         return true;
     }
 };

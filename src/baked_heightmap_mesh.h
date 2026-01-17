@@ -12,7 +12,7 @@
 #include "v3.h"
 #include "render_dx12.h"
 
-struct BakedConstants
+struct BakedHeightmeshConstants
 {
     static constexpr Uint32 indicesPerQuad = 6;
     static constexpr Uint32 chunkDimVerts = 64;
@@ -21,7 +21,7 @@ struct BakedConstants
 
 struct quad_indices
 {
-    Uint32 indices[BakedConstants::indicesPerQuad];
+    Uint32 indices[BakedHeightmeshConstants::indicesPerQuad];
 };
 
 struct
@@ -39,8 +39,8 @@ struct
 
     struct lod_range_baked_heightmap_mesh
     {
-        Uint32 startIndex[BakedConstants::maxLod] = {};
-        Uint32 numIndices[BakedConstants::maxLod] = {};
+        Uint32 startIndex[BakedHeightmeshConstants::maxLod] = {};
+        Uint32 numIndices[BakedHeightmeshConstants::maxLod] = {};
     };
     lod_range_baked_heightmap_mesh *lodRanges;
 
@@ -127,16 +127,16 @@ struct
 
         int quadNum = (img_w - 1) * (img_h - 1);
         terrainMeshIndexBufferSize = (size_t)(quadNum * sizeof(quad_indices) * 2); // TODO: calculate and alloc correct amount of space, we are doing double for now just because that is enough
-        terrainMeshIndexBufferNum = BakedConstants::indicesPerQuad * quadNum;
+        terrainMeshIndexBufferNum = BakedHeightmeshConstants::indicesPerQuad * quadNum;
 
-        chunkNumDim = img_w / BakedConstants::chunkDimVerts;
+        chunkNumDim = img_w / BakedHeightmeshConstants::chunkDimVerts;
         chunkNumTotal = chunkNumDim * chunkNumDim;
-        chunkDimQuads = BakedConstants::chunkDimVerts - 1;
+        chunkDimQuads = BakedHeightmeshConstants::chunkDimVerts - 1;
         Uint32 writeIndex = 0;
 
         lodRanges = (lod_range_baked_heightmap_mesh *)SDL_malloc((size_t)(chunkNumTotal * sizeof(lod_range_baked_heightmap_mesh)));
         terrainMeshIndexBuffer = (quad_indices *)SDL_malloc((size_t)(terrainMeshIndexBufferSize));
-        for (Uint32 lod = 0; lod < BakedConstants::maxLod; ++lod)
+        for (Uint32 lod = 0; lod < BakedHeightmeshConstants::maxLod; ++lod)
         {
             Uint32 lodStep = 1U << lod; // 2 to the power of lod
             for (Uint32 cy = 0; cy < chunkNumDim; ++cy)
