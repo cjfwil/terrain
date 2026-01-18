@@ -263,9 +263,7 @@ struct
         ImGui::Text("Indices:%d", baked_heightmap_mesh.terrainMeshIndexBufferNum);
 
         ImGui::SliderInt("LodDist", &baked_heightmap_mesh.newBaseDist, BakedHeightmeshConstants::chunkDimVerts, 512);
-        static int planetScaleRatioDenom = 50;
-        ImGui::SliderInt("Planet Scale 1:X", &planetScaleRatioDenom, 1, 100);
-        constantBufferData.planetScaleRatio = 1.0f / (float)planetScaleRatioDenom;
+
 
         for (int i = 0; i < BakedHeightmeshConstants::maxLod; ++i)
         {
