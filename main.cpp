@@ -59,40 +59,6 @@ void PrintMatrix(const DirectX::XMFLOAT4X4 &matrix)
     SDL_Log("]\n\n");
 }
 
-// float x and float y are in world space
-float sampleHeightmap(float *heightmap, int dim, float _worldSpacePosX, float _worldSpacePosY, float quadSize, float terrainDimQuads)
-{
-    // convert to [0, 1]
-    float x = _worldSpacePosX / (float)dim;
-    float y = _worldSpacePosY / (float)dim;
-
-    x = (float)SDL_clamp((float)x, 0.0, 1.0f);
-    y = (float)SDL_clamp((float)y, 0.0, 1.0f);
-
-    x *= (float)terrainDimQuads;
-    y *= (float)terrainDimQuads;
-
-    int x0 = (int)(x / quadSize);
-    int y0 = (int)(y / quadSize);
-    int x1 = (x0 + 1 < dim) ? x0 + 1 : x0;
-    int y1 = (y0 + 1 < dim) ? y0 + 1 : y0;
-
-    float tx = x - (float)x0;
-    float ty = y - (float)y0;
-
-    // Fetch 4 neighbors
-    float h00 = heightmap[y0 * dim + x0];
-    float h10 = heightmap[y0 * dim + x1];
-    float h01 = heightmap[y1 * dim + x0];
-    float h11 = heightmap[y1 * dim + x1];
-
-    // Bilinear interpolation
-    float hx0 = h00 + (h10 - h00) * tx;
-    float hx1 = h01 + (h11 - h01) * ty;
-
-    return hx0 + (hx1 - hx0) * ty;
-}
-
 static struct
 {
     SDL_Window *window;
@@ -101,15 +67,6 @@ static struct
     bool fullscreen;
     bool isRunning;
 } programState;
-
-static struct
-{
-    DirectX::XMFLOAT4X4 world;
-    DirectX::XMFLOAT4X4 view; // 4 x 4 matrix has 16 entries. 4 bytes per entry -> 64 bytes total
-    DirectX::XMFLOAT4X4 projection;
-    DirectX::XMVECTOR cameraPos;
-    float planetScaleRatio = 1.0f / 75.0f;
-} constantBufferData;
 
 int main(void)
 {
@@ -474,19 +431,16 @@ int main(void)
 
     const float aspectRatio = (float)width / (float)height;
 
-    int bakedResult = baked_heightmap_mesh.baked();
+    int bakedResult = 0;
+    // bakedResult = baked_heightmap_mesh.baked(); //comment this out to disable the baked mesh
     if (bakedResult != 0)
     {
         err("Baked Mesh failed");
         return 1;
     }
 
-    d3d12_index_buffer terrainMeshIndexBuffer = {};
-    if (!terrainMeshIndexBuffer.create_and_upload(baked_heightmap_mesh.terrainMeshIndexBufferSize, baked_heightmap_mesh.terrainMeshIndexBuffer))
-    {
-        err("Terrain Index Buffer Create and upload failed");
-        return 1;
-    }
+    
+
 
     // create constant buffer
     const UINT constantBufferSize = 256U;
@@ -516,13 +470,6 @@ int main(void)
     renderState.constantBuffer->Map(0, &readRangeCBV, reinterpret_cast<void **>(&CbvDataBegin));
     memcpy(CbvDataBegin, &constantBufferData, sizeof(constantBufferData));
 
-    d3d12_vertex_buffer terrainMeshVertexBuffer;
-    if (!terrainMeshVertexBuffer.create_and_upload(baked_heightmap_mesh.terrainPointsSize, baked_heightmap_mesh.terrainPoints))
-    {
-        err("Terrain Mesh Vertex Buffer create and upload failed");
-        return 1;
-    }
-
     // CREATE BUNDLE
     hr = renderState.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_BUNDLE, renderState.bundleAllocator, renderState.pipelineState, IID_PPV_ARGS(&renderState.bundle));
     if (FAILED(hr))
@@ -533,23 +480,24 @@ int main(void)
 
     renderState.bundle->SetGraphicsRootSignature(renderState.rootSignature);
     renderState.bundle->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    renderState.bundle->IASetVertexBuffers(0, 1, &terrainMeshVertexBuffer.vertexBufferView);
-    renderState.bundle->IASetIndexBuffer(&terrainMeshIndexBuffer.indexBufferView);
+    renderState.bundle->IASetVertexBuffers(0, 1, &baked_heightmap_mesh.terrainMeshVertexBuffer.vertexBufferView);
+    renderState.bundle->IASetIndexBuffer(&baked_heightmap_mesh.terrainMeshIndexBuffer.indexBufferView);
     renderState.bundle->DrawIndexedInstanced(baked_heightmap_mesh.terrainMeshIndexBufferNum, 1, 0, 0, 0);
 
     // renderState.bundle->DrawInstanced(terrainMeshSizeInVertices, 1, 0, 0);
     renderState.bundle->Close();
 
     // beginning of texture
-    d3d12_texture gravelTexture;
-    if (!gravelTexture.create(L"gravel.dds"))
-    {
-        err("Create Texture (gravelTexture) failed.");
-        return 1;
-    }
+    // d3d12_texture gravelTexture;
+    // if (!gravelTexture.create(L"gravel.dds"))
+    // {
+    //     err("Create Texture (gravelTexture) failed.");
+    //     return 1;
+    // }
 
     d3d12_texture heightmapTexture;
-    if (!heightmapTexture.create(L"heightmap.dds", false)) {
+    if (!heightmapTexture.create(L"heightmap.dds", false))
+    {
         err("Create texture failed");
         return 1;
     }
@@ -742,14 +690,6 @@ int main(void)
         static float debugBoostSpeed = 2.7778f; // same speed as average 16th century merchant vessel
         static int debugDrawOnlyChunk = 0;
 
-        static int newBaseDist = 141;
-        static int drawDist[BakedHeightmeshConstants::maxLod] = {150, 300, 600, 1200, 2400, 4800};
-        static bool renderBeyondMaxRange = false;
-
-        // 0.091f is a nice value for 1080p with good performance on a 2k heightmap, but more for flying up into the atmosphere, doesnt have an effect when on top of mountains
-        static float heightbasedLODModScaler = 0.091f; // dont put this to zero or lower TODO: calculate appropriate min and max
-        static bool enableHeightLODMod = false;
-
         if (enableImgui)
         {
             ImGui_ImplDX12_NewFrame();
@@ -758,23 +698,15 @@ int main(void)
             static bool show_demo_window = false;
             if (show_demo_window)
                 ImGui::ShowDemoWindow(&show_demo_window);
+
+            if (baked_heightmap_mesh.created)
+                baked_heightmap_mesh.imgui_show_options();
             ImGui::Text("Application average %.3f ms/frame (%.2f FPS)",
                         1000.0f / ImGui::GetIO().Framerate,
                         ImGui::GetIO().Framerate);
 
             // basic profiling
-
-            ImGui::SliderInt("LodDist", &newBaseDist, BakedHeightmeshConstants::chunkDimVerts, 512);
-            static int planetScaleRatioDenom = 50;
-            ImGui::SliderInt("Planet Scale 1:X", &planetScaleRatioDenom, 1, 100);
-            constantBufferData.planetScaleRatio = 1.0f / (float)planetScaleRatioDenom;
-
             ImGui::SliderFloat("Debug Speed Boost", &debugBoostSpeed, 1.0f, 1000.0f, "%.3f", ImGuiSliderFlags_Logarithmic);
-
-            for (int i = 0; i < BakedHeightmeshConstants::maxLod; ++i)
-            {
-                ImGui::Text("LOD%d: %d", i, drawDist[i]);
-            }
 
             uint64_t frameHistoryIndex = programState.ticksElapsed % 256;
             profiling.frameRateHistory[frameHistoryIndex] = ImGui::GetIO().Framerate;
@@ -782,12 +714,6 @@ int main(void)
 
             // options
             ImGui::Checkbox("VSync", &vsync);
-            ImGui::Checkbox("Render beyond Max range", &renderBeyondMaxRange);
-            ImGui::Checkbox("Boost terrain detail when camera is higher", &enableHeightLODMod);
-            if (enableHeightLODMod)
-            {
-                ImGui::SliderFloat("Scaler", &heightbasedLODModScaler, 0.01f, 0.1f, "%.3f", ImGuiSliderFlags_Logarithmic);
-            }
 
             // FPS values
             profiling.update_fps();
@@ -986,61 +912,8 @@ int main(void)
         renderState.commandList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
 
         // non bundle rendering
-        renderState.commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        renderState.commandList->IASetVertexBuffers(0, 1, &terrainMeshVertexBuffer.vertexBufferView);
-        renderState.commandList->IASetIndexBuffer(&terrainMeshIndexBuffer.indexBufferView);
-        // renderState.commandList->DrawIndexedInstanced(baked_heightmap_mesh.terrainMeshIndexBufferNum, 1, 0, 0, 0);
-
-        // debugDrawOnlyChunk = programState.ticksElapsed % (chunkNumTotal);
-
-        // for live tweaking of LOD distance
-        int baseDist = 0;
-        if (newBaseDist != baseDist || 1)
-        {
-            baseDist = newBaseDist;
-            // extra lod when camera is high. TODO: should we even be doing this?
-            // TODO: figure this out because this doesnt feel right
-            float heightbasedLODMod = 1.0f;
-            if (enableHeightLODMod && cameraPos.y > 0)
-            {
-                heightbasedLODMod = SDL_clamp(heightbasedLODModScaler * sqrtf(cameraPos.y), 1.0f, 8.0f);
-            }
-            for (int lod = 0; lod < BakedHeightmeshConstants::maxLod; ++lod)
-            {
-                drawDist[lod] = baseDist * (1 << lod) * heightbasedLODMod;
-            }
-        }
-
-        for (UINT i = 0; i < baked_heightmap_mesh.chunkNumTotal; ++i)
-        {
-
-            UINT cx = (i % baked_heightmap_mesh.chunkNumDim) * baked_heightmap_mesh.chunkDimQuads;
-            UINT cy = (i / baked_heightmap_mesh.chunkNumDim) * baked_heightmap_mesh.chunkDimQuads;
-            v3 pointEye = cameraPos;
-            int distCx = (pointEye.x - (int)cx);
-            int distCy = (pointEye.y - 0);
-            int distCz = (pointEye.z - (int)cy);
-            int squaredDist = distCx * distCx + distCy * distCy + distCz * distCz;
-
-            int desiredLod = (renderBeyondMaxRange) ? BakedHeightmeshConstants::maxLod - 1 : -1; // -1 == cull
-
-            // TODO: somehow figure out how to cull when a chunk is well below the horizon
-            // mountains sticking up above horizon
-            for (int j = 0; j < BakedHeightmeshConstants::maxLod; ++j)
-            {
-                if (squaredDist < drawDist[j] * drawDist[j])
-                {
-                    desiredLod = j;
-                    break;
-                }
-            }
-            if (desiredLod >= 0)
-            {
-                UINT currentStartingIndex = baked_heightmap_mesh.lodRanges[i].startIndex[desiredLod] * 6U;
-                UINT numIndicesToDraw = baked_heightmap_mesh.lodRanges[i].numIndices[desiredLod] * 6U;
-                renderState.commandList->DrawIndexedInstanced(numIndicesToDraw, 1, currentStartingIndex, 0, 0);
-            }
-        }
+        if (baked_heightmap_mesh.created)
+            baked_heightmap_mesh.draw(cameraPos);
 
         // bundle rendering
         // renderState.commandList->ExecuteBundle(renderState.bundle);

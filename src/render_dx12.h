@@ -18,6 +18,15 @@
 
 #include "error.h"
 
+static struct
+{
+    DirectX::XMFLOAT4X4 world;
+    DirectX::XMFLOAT4X4 view; // 4 x 4 matrix has 16 entries. 4 bytes per entry -> 64 bytes total
+    DirectX::XMFLOAT4X4 projection;
+    DirectX::XMVECTOR cameraPos;
+    float planetScaleRatio = 1.0f / 75.0f;
+} constantBufferData;
+
 struct vertex
 {
     DirectX::XMFLOAT3 position;
@@ -317,7 +326,6 @@ struct d3d12_texture
             texture,
             &srvDesc,
             srvHandleCPU);
-
 
         // TODO: Need proper allocator that releases and stuff after pending
         // NOTE: CURRENT MEMORY LEAK BUT DONT UNCOMMENT THIS LINE IT CRASHES

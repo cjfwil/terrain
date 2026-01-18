@@ -26,8 +26,10 @@ struct quad_indices
 
 struct
 {
+    bool created = false;
+
     size_t terrainMeshIndexBufferSize;
-    quad_indices *terrainMeshIndexBuffer;
+    quad_indices *terrainMeshIndexBuffer_;
     size_t terrainPointsSize;
     vertex *terrainPoints;
     Uint32 terrainMeshIndexBufferNum;
@@ -36,6 +38,17 @@ struct
     int terrainDimInQuads;
     Uint32 chunkDimQuads;
     Uint32 chunkNumDim;
+
+    // 0.091f is a nice value for 1080p with good performance on a 2k heightmap, but more for flying up into the atmosphere, doesnt have an effect when on top of mountains
+    float heightbasedLODModScaler = 0.091f; // dont put this to zero or lower TODO: calculate appropriate min and max
+    bool enableHeightLODMod = false;
+    int drawDist[BakedHeightmeshConstants::maxLod] = {150, 300, 600, 1200, 2400, 4800};
+    bool renderBeyondMaxRange = false;
+    int baseDist = 0;
+    int newBaseDist = 141;
+
+    d3d12_vertex_buffer terrainMeshVertexBuffer;
+    d3d12_index_buffer terrainMeshIndexBuffer = {};
 
     struct lod_range_baked_heightmap_mesh
     {
@@ -135,7 +148,7 @@ struct
         Uint32 writeIndex = 0;
 
         lodRanges = (lod_range_baked_heightmap_mesh *)SDL_malloc((size_t)(chunkNumTotal * sizeof(lod_range_baked_heightmap_mesh)));
-        terrainMeshIndexBuffer = (quad_indices *)SDL_malloc((size_t)(terrainMeshIndexBufferSize));
+        terrainMeshIndexBuffer_ = (quad_indices *)SDL_malloc((size_t)(terrainMeshIndexBufferSize));
         for (Uint32 lod = 0; lod < BakedHeightmeshConstants::maxLod; ++lod)
         {
             Uint32 lodStep = 1U << lod; // 2 to the power of lod
@@ -162,13 +175,106 @@ struct
                             q.indices[4] = i + img_w * lodStep + lodStep;
                             q.indices[5] = i + lodStep;
 
-                            terrainMeshIndexBuffer[writeIndex++] = q;
+                            terrainMeshIndexBuffer_[writeIndex++] = q;
                         }
                     }
                     lodRanges[cx + cy * chunkNumDim].numIndices[lod] = writeIndex - currentLodStart;
                 }
             }
         }
+
+        if (!terrainMeshVertexBuffer.create_and_upload(baked_heightmap_mesh.terrainPointsSize, baked_heightmap_mesh.terrainPoints))
+        {
+            err("Terrain Mesh Vertex Buffer create and upload failed");
+            return 1;
+        }
+        
+        if (!terrainMeshIndexBuffer.create_and_upload(baked_heightmap_mesh.terrainMeshIndexBufferSize, baked_heightmap_mesh.terrainMeshIndexBuffer_))
+        {
+            err("Terrain Index Buffer Create and upload failed");
+            return 1;
+        }
+
+        created = true;
         return 0;
+    }
+
+    void draw(v3 cameraPos)
+    {
+        renderState.commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        renderState.commandList->IASetVertexBuffers(0, 1, &terrainMeshVertexBuffer.vertexBufferView);
+        renderState.commandList->IASetIndexBuffer(&terrainMeshIndexBuffer.indexBufferView);
+
+        // for live tweaking of LOD distance
+
+        if (newBaseDist != baseDist || 1)
+        {
+            baseDist = newBaseDist;
+            // extra lod when camera is high. TODO: should we even be doing this?
+            // TODO: figure this out because this doesnt feel right
+            float heightbasedLODMod = 1.0f;
+            if (enableHeightLODMod && cameraPos.y > 0)
+            {
+                heightbasedLODMod = SDL_clamp(heightbasedLODModScaler * sqrtf(cameraPos.y), 1.0f, 8.0f);
+            }
+            for (int lod = 0; lod < BakedHeightmeshConstants::maxLod; ++lod)
+            {
+                drawDist[lod] = baseDist * (1 << lod) * heightbasedLODMod;
+            }
+        }
+
+        for (UINT i = 0; i < baked_heightmap_mesh.chunkNumTotal; ++i)
+        {
+
+            UINT cx = (i % baked_heightmap_mesh.chunkNumDim) * baked_heightmap_mesh.chunkDimQuads;
+            UINT cy = (i / baked_heightmap_mesh.chunkNumDim) * baked_heightmap_mesh.chunkDimQuads;
+            v3 pointEye = cameraPos;
+            int distCx = (pointEye.x - (int)cx);
+            int distCy = (pointEye.y - 0);
+            int distCz = (pointEye.z - (int)cy);
+            int squaredDist = distCx * distCx + distCy * distCy + distCz * distCz;
+
+            int desiredLod = (renderBeyondMaxRange) ? BakedHeightmeshConstants::maxLod - 1 : -1; // -1 == cull
+
+            // TODO: somehow figure out how to cull when a chunk is well below the horizon
+            // dont cull mountains sticking up above horizon?????
+            for (int j = 0; j < BakedHeightmeshConstants::maxLod; ++j)
+            {
+                if (squaredDist < drawDist[j] * drawDist[j])
+                {
+                    desiredLod = j;
+                    break;
+                }
+            }
+            if (desiredLod >= 0)
+            {
+                UINT currentStartingIndex = baked_heightmap_mesh.lodRanges[i].startIndex[desiredLod] * 6U;
+                UINT numIndicesToDraw = baked_heightmap_mesh.lodRanges[i].numIndices[desiredLod] * 6U;
+                renderState.commandList->DrawIndexedInstanced(numIndicesToDraw, 1, currentStartingIndex, 0, 0);
+            }
+        }
+    }
+
+    void imgui_show_options()
+    {
+        ImGui::Begin("Terrain Mesh Options");
+
+        ImGui::SliderInt("LodDist", &baked_heightmap_mesh.newBaseDist, BakedHeightmeshConstants::chunkDimVerts, 512);
+        static int planetScaleRatioDenom = 50;
+        ImGui::SliderInt("Planet Scale 1:X", &planetScaleRatioDenom, 1, 100);
+        constantBufferData.planetScaleRatio = 1.0f / (float)planetScaleRatioDenom;
+
+        for (int i = 0; i < BakedHeightmeshConstants::maxLod; ++i)
+        {
+            ImGui::Text("LOD%d: %d", i, baked_heightmap_mesh.drawDist[i]);
+        }
+
+        ImGui::Checkbox("Render beyond Max range", &baked_heightmap_mesh.renderBeyondMaxRange);
+        ImGui::Checkbox("Boost terrain detail when camera is higher", &baked_heightmap_mesh.enableHeightLODMod);
+        if (baked_heightmap_mesh.enableHeightLODMod)
+        {
+            ImGui::SliderFloat("Scaler", &baked_heightmap_mesh.heightbasedLODModScaler, 0.01f, 0.1f, "%.3f", ImGuiSliderFlags_Logarithmic);
+        }
+        ImGui::End();
     }
 } baked_heightmap_mesh;
