@@ -188,7 +188,7 @@ struct
             err("Terrain Mesh Vertex Buffer create and upload failed");
             return 1;
         }
-        
+
         if (!terrainMeshIndexBuffer.create_and_upload(baked_heightmap_mesh.terrainMeshIndexBufferSize, baked_heightmap_mesh.terrainMeshIndexBuffer_))
         {
             err("Terrain Index Buffer Create and upload failed");
@@ -258,6 +258,9 @@ struct
     void imgui_show_options()
     {
         ImGui::Begin("Terrain Mesh Options");
+
+        ImGui::Text("Vertices:%d", baked_heightmap_mesh.terrainPointsNum);
+        ImGui::Text("Indices:%d", baked_heightmap_mesh.terrainMeshIndexBufferNum);
 
         ImGui::SliderInt("LodDist", &baked_heightmap_mesh.newBaseDist, BakedHeightmeshConstants::chunkDimVerts, 512);
         static int planetScaleRatioDenom = 50;

@@ -439,8 +439,26 @@ int main(void)
         return 1;
     }
 
-    
+    d3d12_vertex_buffer terrainGridVB;
+    const int terrainGridVertexDimension = 64;
+    const size_t terrainGridVertexDataSize = terrainGridVertexDimension*terrainGridVertexDimension*sizeof(vertex);
+    vertex terrainGridVertexData[terrainGridVertexDimension * terrainGridVertexDimension] = {};
+    for (int y = 0; y < terrainGridVertexDimension; ++y)
+    {
+        for (int x = 0; x < terrainGridVertexDimension; ++x)
+        {
+            vertex v = {};
+            v.position.x = x;
+            v.position.y = 0;
+            v.position.z = y;
 
+            terrainGridVertexData[x+y*terrainGridVertexDimension] = v;
+        }
+    }
+    if (!terrainGridVB.create_and_upload(terrainGridVertexDataSize, terrainGridVertexData)) {
+        err("Failed to create or upload terrain grid mesh");
+        return 1;
+    }
 
     // create constant buffer
     const UINT constantBufferSize = 256U;
@@ -727,9 +745,6 @@ int main(void)
             ImGui::Text("Render:  %.3f ms", profiling.render_ms);
             ImGui::Text("Present: %.3f ms", profiling.present_ms);
             ImGui::Text("Frame:   %.3f ms", profiling.frame_ms);
-
-            ImGui::Text("Vertices:%d", baked_heightmap_mesh.terrainPointsNum);
-            ImGui::Text("Indices:%d", baked_heightmap_mesh.terrainMeshIndexBufferNum);
 
             if (gamepad)
             {
