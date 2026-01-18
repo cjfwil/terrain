@@ -70,6 +70,11 @@ static struct
 
 int main(void)
 {
+    // todo game state struct:
+    static v3 cameraPos = {0, 120.0f, 0.0f};
+    static float cameraYaw = 2.45f;
+    static float cameraPitch = 0.0f;
+
     if (!SetExtendedMetadata())
         return 1;
 
@@ -327,23 +332,24 @@ int main(void)
     ranges[0].Init(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, 1, 0);
     ranges[1].Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0, 0, D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC);
     CD3DX12_ROOT_PARAMETER1 rootParameters[2];
-    rootParameters[0].InitAsDescriptorTable(1, &ranges[0], D3D12_SHADER_VISIBILITY_VERTEX); // crv
-    rootParameters[1].InitAsDescriptorTable(1, &ranges[1], D3D12_SHADER_VISIBILITY_PIXEL);  // srv
+    // rootParameters[0].InitAsDescriptorTable(1, &ranges[0], D3D12_SHADER_VISIBILITY_VERTEX); // crv
+    rootParameters[0].InitAsConstantBufferView(0);
+    rootParameters[1].InitAsDescriptorTable(1, &ranges[1], D3D12_SHADER_VISIBILITY_ALL); // srv
 
     D3D12_STATIC_SAMPLER_DESC sampler = {};
-    sampler.Filter = D3D12_FILTER_ANISOTROPIC;
-    sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-    sampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-    sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+    sampler.Filter = sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_POINT; // TODO: make different filter for heightmaps versus albedo
+    // sampler.MaxAnisotropy = 16;
+    sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    sampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
     sampler.MipLODBias = 0;
-    sampler.MaxAnisotropy = 16;
     sampler.ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER;
     sampler.BorderColor = D3D12_STATIC_BORDER_COLOR_TRANSPARENT_BLACK;
     sampler.MinLOD = 0.0f;
     sampler.MaxLOD = D3D12_FLOAT32_MAX;
     sampler.ShaderRegister = 0;
     sampler.RegisterSpace = 0;
-    sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     D3D12_ROOT_SIGNATURE_FLAGS rootSignatureFlags =
         D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
@@ -374,10 +380,16 @@ int main(void)
     UINT compileFlags = 0;
 #endif
 
-    hr = D3DCompileFromFile(L"shaders.hlsl", nullptr, nullptr, "VSMain", "vs_5_0", compileFlags, 0, &renderState.vertexShader, nullptr);
+    ID3DBlob *vsError = nullptr;
+    hr = D3DCompileFromFile(L"shaders.hlsl", nullptr, nullptr, "VSMain", "vs_5_0", compileFlags, 0, &renderState.vertexShader, &vsError);
     if (FAILED(hr))
     {
         errhr("D3DCompile from file failed (vertex shader)", hr);
+        if (vsError)
+        {
+            SDL_Log((char *)vsError->GetBufferPointer());
+            vsError->Release();
+        }
         return 1;
     }
     hr = D3DCompileFromFile(L"shaders.hlsl", nullptr, nullptr, "PSMain", "ps_5_0", compileFlags, 0, &renderState.pixelShader, nullptr);
@@ -395,7 +407,7 @@ int main(void)
 
     D3D12_RASTERIZER_DESC rasterizerDesc = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
     // rasterizerDesc.FillMode = D3D12_FILL_MODE_WIREFRAME;
-    // rasterizerDesc.CullMode = D3D12_CULL_MODE_NONE; // Disable culling (backface culling)
+    rasterizerDesc.CullMode = D3D12_CULL_MODE_NONE; // Disable culling (backface culling)
 
     D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
     psoDesc.InputLayout = {inputElementDesc, _countof(inputElementDesc)};
@@ -440,32 +452,43 @@ int main(void)
     }
 
     d3d12_vertex_buffer terrainGridVB;
-    const int terrainGridVertexDimension = 64;
-    const size_t terrainGridVertexDataSize = terrainGridVertexDimension*terrainGridVertexDimension*sizeof(vertex);
-    vertex terrainGridVertexData[terrainGridVertexDimension * terrainGridVertexDimension] = {};
-    for (int y = 0; y < terrainGridVertexDimension; ++y)
+    const int terrainGridDimensionInVertices = 64;
+    const int terrainGridVertexCount = terrainGridDimensionInVertices * terrainGridDimensionInVertices;
+    const size_t terrainGridVertexDataSize = terrainGridVertexCount * sizeof(vertex);
+    vertex *terrainGridVertexData = (vertex *)SDL_malloc(terrainGridVertexDataSize);
+    for (int y = 0; y < terrainGridDimensionInVertices; ++y)
     {
-        for (int x = 0; x < terrainGridVertexDimension; ++x)
+        for (int x = 0; x < terrainGridDimensionInVertices; ++x)
         {
             vertex v = {};
             v.position.x = x;
             v.position.y = 0;
             v.position.z = y;
 
-            terrainGridVertexData[x+y*terrainGridVertexDimension] = v;
+            terrainGridVertexData[x + y * terrainGridDimensionInVertices] = v;
         }
     }
-    if (!terrainGridVB.create_and_upload(terrainGridVertexDataSize, terrainGridVertexData)) {
+    if (!terrainGridVB.create_and_upload(terrainGridVertexDataSize, terrainGridVertexData))
+    {
         err("Failed to create or upload terrain grid mesh");
         return 1;
     }
+
+    d3d12_index_buffer terrainGridIB;    
+
+
+    int visibleChunkDim = 8;
+    const int maxChunks = visibleChunkDim * visibleChunkDim; // for terrain
+    // TODO: make reusuable constant buffer stuff
 
     // create constant buffer
     const UINT constantBufferSize = 256U;
     static UINT *CbvDataBegin = nullptr;
 
+    const UINT TotalCBSize = constantBufferSize * maxChunks;
+
     CD3DX12_HEAP_PROPERTIES heapPropsUpload(D3D12_HEAP_TYPE_UPLOAD);
-    CD3DX12_RESOURCE_DESC constantBufferDesc = CD3DX12_RESOURCE_DESC::Buffer(constantBufferSize);
+    CD3DX12_RESOURCE_DESC constantBufferDesc = CD3DX12_RESOURCE_DESC::Buffer(TotalCBSize);
     hr = renderState.device->CreateCommittedResource(
         &heapPropsUpload,
         D3D12_HEAP_FLAG_NONE,
@@ -730,6 +753,10 @@ int main(void)
             profiling.frameRateHistory[frameHistoryIndex] = ImGui::GetIO().Framerate;
             ImGui::PlotLines("Frametime", profiling.frameRateHistory, IM_ARRAYSIZE(profiling.frameRateHistory), (int)frameHistoryIndex);
 
+            // camera info
+            ImGui::Text("Camera Pos: %.2f, %.2f, %.2f", cameraPos.x, cameraPos.y, cameraPos.z);
+            ImGui::Text("Camera Yaw: %.2f. Pitch %.2f", cameraYaw, cameraPitch);
+
             // options
             ImGui::Checkbox("VSync", &vsync);
 
@@ -777,8 +804,6 @@ int main(void)
             movingPoint = -offsetBounds;
         }
 
-        static float cameraYaw = PI * 2.26f / 3.0f;
-        static float cameraPitch = 0.0f;
         float epsilon = 0.0001f;
 
         // static bool enableMouseLook = true;
@@ -851,7 +876,6 @@ int main(void)
         static float strafeSpeed = 0.0f;
         strafeSpeed = inputMotionXAxis * deltaTime * debugBoostSpeed;
 
-        static v3 cameraPos = {(float)baked_heightmap_mesh.terrainDimInQuads, 100.0f, 0.0f};
         cameraPos = cameraPos + (cameraForward * forwardSpeed);
         cameraPos = cameraPos + (cameraRight * strafeSpeed);
 
@@ -904,7 +928,10 @@ int main(void)
         ID3D12DescriptorHeap *heaps[] = {renderState.srvHeap};
         renderState.commandList->SetDescriptorHeaps(_countof(heaps), heaps);
 
-        renderState.commandList->SetGraphicsRootDescriptorTable(0, renderState.srvHeap->GetGPUDescriptorHandleForHeapStart()); // CBV
+        // renderState.commandList->SetGraphicsRootDescriptorTable(0, renderState.srvHeap->GetGPUDescriptorHandleForHeapStart()); // CBV
+        renderState.commandList->SetGraphicsRootConstantBufferView(
+            0, // root parameter index
+            renderState.constantBuffer->GetGPUVirtualAddress());
 
         D3D12_GPU_DESCRIPTOR_HANDLE srvHandleGPU = renderState.srvHeap->GetGPUDescriptorHandleForHeapStart();
         srvHandleGPU.ptr += renderState.cbvSrvDescriptorSize;
@@ -929,6 +956,39 @@ int main(void)
         // non bundle rendering
         if (baked_heightmap_mesh.created)
             baked_heightmap_mesh.draw(cameraPos);
+
+        renderState.commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_POINTLIST);
+        renderState.commandList->IASetVertexBuffers(0, 1, &terrainGridVB.vertexBufferView);
+        // renderState.commandList->SetGraphicsRootConstantBufferView(0, renderState.constantBuffer->GetGPUVirtualAddress());
+
+        float chunkSize = terrainGridDimensionInVertices; // 1 vertex = 1 unit for now
+        int cameraChunkX = (int)floor(cameraPos.x / terrainGridDimensionInVertices);
+        int cameraChunkY = (int)floor(cameraPos.z / terrainGridDimensionInVertices);
+        int halfW = visibleChunkDim / 2;
+        int halfH = visibleChunkDim / 2;
+
+        for (int i = 0; i < maxChunks; ++i)
+        {
+            // update constant buffer
+            int localX = i % visibleChunkDim;
+            int localY = i / visibleChunkDim;
+
+            int x = cameraChunkX + (localX - halfW);
+            int y = cameraChunkY + (localY - halfH);
+            DirectX::XMMATRIX chunkWorld = DirectX::XMMatrixTranslation(
+                x * chunkSize,
+                0.0f,
+                y * chunkSize);
+            DirectX::XMStoreFloat4x4(&constantBufferData.world, chunkWorld); // Upload updated CB data
+
+            UINT cbOffset = i * constantBufferSize;
+
+            memcpy(reinterpret_cast<byte *>(CbvDataBegin) + cbOffset, &constantBufferData, sizeof(constantBufferData));
+            renderState.commandList->SetGraphicsRootConstantBufferView(0, renderState.constantBuffer->GetGPUVirtualAddress() + cbOffset);
+
+            renderState.commandList->DrawInstanced(terrainGridVertexCount, 1, 0, 0);
+        }
+        // renderState.commandList->IASetIndexBuffer(&terrainMeshIndexBuffer.indexBufferView);
 
         // bundle rendering
         // renderState.commandList->ExecuteBundle(renderState.bundle);

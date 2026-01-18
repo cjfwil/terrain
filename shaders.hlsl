@@ -23,6 +23,12 @@ VSOut VSMain(float3 position : POSITION, float2 uv : TEXCOORD, float3 norm : NOR
     VSOut o;
     
     float4 wp = mul(world, float4(position, 1.0f));
+
+    float heightmapDim = 8192.0f;    
+    float2 pUv = wp.xz + 0.5f;
+    float2 terrainHeightmapUV = float2(1.0 - pUv.x, pUv.y) / heightmapDim;
+    wp.y = g_texture.SampleLevel(g_sampler, terrainHeightmapUV, 0).r*(5000.0f*0.02f);
+    
     float3 worldPos = wp.xyz;
 
     // camera-relative curvature (visual only)
@@ -69,7 +75,8 @@ float4 PSMain(VSOut IN) : SV_Target
     float3 N = normalize(IN.normalWS);
 
     // Map from [-1,1] to [0,1]
-    float3 color = N * 0.5f + 0.5f;
+    // float3 colour = N * 0.5f + 0.5f;
+    float3 colour = float3(1.0f, 1.0f, 1.0f);
 
-    return float4(color, 1.0f);
+    return float4(colour, 1.0f);
 }

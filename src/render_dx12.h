@@ -308,7 +308,7 @@ struct d3d12_texture
         auto barrier = CD3DX12_RESOURCE_BARRIER::Transition(
             texture,
             D3D12_RESOURCE_STATE_COPY_DEST,
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         renderState.commandList->ResourceBarrier(1, &barrier);
 
         // Create SRV
