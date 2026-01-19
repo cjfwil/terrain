@@ -39,8 +39,15 @@ struct vertex
 };
 
 struct vertex_optimised_heightmap {
-    DirectX::XMFLOAT2 position;     
+    uint16_t x;
+    uint16_t y;
 };
+
+//TODO ultra optimised heightmap for grids that are set to 129x129 vertices?
+// struct vertex_ultra_optimised_heightmap {
+//     uint8_t x;
+//     uint8_t y;
+// };
 
 // Simple free list based allocator
 struct ImGuiDescriptorHeapAllocator
@@ -200,10 +207,12 @@ struct d3d12_texture
 {
     ID3D12Resource *texture = nullptr;
     wchar_t *filename;
+    UINT descriptorIndex = 0; // which SRV slot in the heap
 
-    bool create(wchar_t *_filename = L"gravel.dds", bool mipmaps = true)
+    bool create(wchar_t *_filename = L"gravel.dds", bool mipmaps = true, UINT srvIndex=0)
     {
         filename = _filename;
+        descriptorIndex = srvIndex;
         DirectX::ScratchImage image;
         DirectX::TexMetadata metadata;
 
@@ -328,7 +337,7 @@ struct d3d12_texture
 
         D3D12_CPU_DESCRIPTOR_HANDLE srvHandleCPU =
             renderState.srvHeap->GetCPUDescriptorHandleForHeapStart();
-        srvHandleCPU.ptr += renderState.cbvSrvDescriptorSize;
+        srvHandleCPU.ptr += renderState.cbvSrvDescriptorSize*descriptorIndex;
 
         renderState.device->CreateShaderResourceView(
             texture,

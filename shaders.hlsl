@@ -21,10 +21,11 @@ struct VSOut
 };
 
 Texture2D g_texture : register(t0);
+Texture2D g_albedo : register(t1);
 SamplerState g_sampler : register(s0);
 
 // VSOut VSMain(float3 position : POSITION, float2 uv : TEXCOORD, float3 norm : NORMAL)
-VSOut VSMain(float2 position : POSITION)
+VSOut VSMain(uint2 position : POSITION)
 {    
     // int lodLevel = currentLodLevel*sampleLodLevelWithMipmaps;
     int lodLevel = 0;
@@ -40,12 +41,13 @@ VSOut VSMain(float2 position : POSITION)
     // wp.xz *= ringWorldSize / gridDimSize;
     wp = mul(world, wp);
 
-    float heightmapDim = 8192.0f;    
+    // float heightmapDim = 8192.0f;    
+    float heightmapDim = 8192.0f*2; 
     float2 pUv = wp.xz + 0.5f + ringOffset;
     float2 terrainHeightmapUV = float2(1.0 - pUv.x, pUv.y) / heightmapDim;
     float heightPointData = g_texture.SampleLevel(g_sampler, terrainHeightmapUV, lodLevel).r;
-    float artistScale = (5000.0f*0.02f); //controlled by human hand, dependent on heightmap
-    // float artistScale = (5000.0f*0.2f); 
+    // float artistScale = (5000.0f*0.02f); //controlled by human hand, dependent on heightmap
+    float artistScale = (5000.0f*0.015f); 
     wp.y = heightPointData*artistScale;
 
     // float heightPointData = g_texture.SampleLevel(g_sampler, terrainHeightmapUV, lodLevel).r;
@@ -99,7 +101,7 @@ VSOut VSMain(float2 position : POSITION)
 
     float3 n = normalize(cross(dz, dx));
 
-    float seaTex = 1.9f / 100.0f;   // your actual water level in texture space
+    float seaTex = 0.2f / 100.0f;   // your actual water level in texture space
     float seaLevel = seaTex * artistScale;
 
     o.water.x = step(wp.y, seaLevel);
@@ -139,7 +141,9 @@ VSOut VSMain(float2 position : POSITION)
     o.position = mul(projection, viewPos);
 
     o.worldPos = worldPos;
-    // o.uv = uv;
+
+    // float2 uv = float2(position) / (heightmapDim+1);
+    o.uv = terrainHeightmapUV;
     
     return o;
 }
@@ -151,13 +155,15 @@ float4 PSMain(VSOut IN) : SV_Target
     const float3 lightColor = float3(1.0f, 0.98f, 0.9f);
     const float ambient = 0.2f;
 
-    // float4 albedo = g_texture.Sample(g_sampler, IN.uv);
+    float4 sampleData = g_albedo.Sample(g_sampler, IN.uv);
     // float4 albedo = float4(0.8f,0.75f,0.5f,1.0f);
     // float3 wetlandColour = float3(0.8f, 0.75f, 0.5f) / 5.0f; 
     float wetness = clamp(IN.water.y*5, 0.25f, 1.0f);
-    float3 landColor = float3(0.8f, 0.75f, 0.5f) * wetness;
-    float3 waterColor = lerp(float3(0.0f, 0.3f, 0.8f), landColor, 0.5f);
+    float blendStrength = 0.6f; // how strong the albedo layer is
+    float3 landColor = lerp(float3(0.8f, 0.75f, 0.5f), sampleData.rgb, blendStrength);
 
+    float3 waterColor = lerp(float3(0.0f, 0.3f, 0.8f), landColor, 0.5f);
+    
     float3 base = lerp(landColor, waterColor, IN.water.x);    
     float4 albedo = float4(base, 1.0f);
 

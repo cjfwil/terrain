@@ -399,7 +399,7 @@ int main(void)
 
     CD3DX12_DESCRIPTOR_RANGE1 ranges[2];
     ranges[0].Init(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, 1, 0);
-    ranges[1].Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0, 0, D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC);
+    ranges[1].Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 2, 0, 0, D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC);
     CD3DX12_ROOT_PARAMETER1 rootParameters[2];
     // rootParameters[0].InitAsDescriptorTable(1, &ranges[0], D3D12_SHADER_VISIBILITY_VERTEX); // crv
     rootParameters[0].InitAsConstantBufferView(0);
@@ -407,8 +407,9 @@ int main(void)
 
     // TODO: abstract out into reusable
     D3D12_STATIC_SAMPLER_DESC sampler = {};
-    sampler.Filter = sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_POINT; // TODO: make different filter for heightmaps versus albedo
-    // sampler.MaxAnisotropy = 16;
+    // sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_POINT; // TODO: make different filter for heightmaps versus albedo
+    sampler.Filter = D3D12_FILTER_ANISOTROPIC;
+    sampler.MaxAnisotropy = 16;
     sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP; // these are only specifically for the world terrain (wrap only going sideways)
     sampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
     sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
@@ -479,7 +480,7 @@ int main(void)
     // heightmap mesh stuff
     D3D12_INPUT_ELEMENT_DESC inputElementDesc[] =
         {
-            {"POSITION", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+            {"POSITION", 0, DXGI_FORMAT_R16G16_UINT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
             // {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
             // {"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 20, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0}
         };
@@ -530,7 +531,7 @@ int main(void)
         return 1;
     }
 
-    const int terrainGridDimensionInVertices = 256 + 1;
+    const int terrainGridDimensionInVertices = 128 + 1;
     float terrainGridDimensionInWorldUnits = terrainGridDimensionInVertices - 1;
     constantBufferData.terrainGridDimensionInVertices = terrainGridDimensionInVertices;
     d3d12_vertex_buffer terrainGridVB;
@@ -543,8 +544,8 @@ int main(void)
         for (int x = 0; x < terrainGridDimensionInVertices; ++x)
         {
             vertex_optimised_heightmap v = {};
-            v.position.x = x;
-            v.position.y = y;
+            v.x = x;
+            v.y = y;
             // v.position.z = y;
 
             terrainGridVertexData[x + y * terrainGridDimensionInVertices] = v;
@@ -684,7 +685,14 @@ int main(void)
     // }
 
     d3d12_texture heightmapTexture;
-    if (!heightmapTexture.create(L"heightmap.dds", false))
+    if (!heightmapTexture.create(L"greece_heightmap.dds", false, 0))
+    {
+        err("Create texture failed");
+        return 1;
+    }
+
+    d3d12_texture albedoTexture;
+    if (!albedoTexture.create(L"greece_albedo.dds", false, 1))
     {
         err("Create texture failed");
         return 1;
@@ -1032,7 +1040,7 @@ int main(void)
         strafeSpeed = inputMotionXAxis * deltaTime * debugBoostSpeed;
 
         cameraPos = cameraPos + (cameraForward * forwardSpeed);
-        cameraPos = cameraPos + (cameraRight * strafeSpeed);        
+        cameraPos = cameraPos + (cameraRight * strafeSpeed);
 
         QueryPerformanceCounter(&profiling.t1);
 
@@ -1089,9 +1097,13 @@ int main(void)
             0, // root parameter index
             renderState.constantBuffer->GetGPUVirtualAddress());
 
-        D3D12_GPU_DESCRIPTOR_HANDLE srvHandleGPU = renderState.srvHeap->GetGPUDescriptorHandleForHeapStart();
-        srvHandleGPU.ptr += renderState.cbvSrvDescriptorSize;
-        renderState.commandList->SetGraphicsRootDescriptorTable(1, srvHandleGPU);
+        // D3D12_GPU_DESCRIPTOR_HANDLE srvHandleGPU = renderState.srvHeap->GetGPUDescriptorHandleForHeapStart();
+        // srvHandleGPU.ptr += renderState.cbvSrvDescriptorSize;
+        // renderState.commandList->SetGraphicsRootDescriptorTable(1, srvHandleGPU);
+        D3D12_GPU_DESCRIPTOR_HANDLE srvStart =
+            renderState.srvHeap->GetGPUDescriptorHandleForHeapStart();
+        renderState.commandList->SetGraphicsRootDescriptorTable(1, srvStart);
+
         renderState.commandList->RSSetViewports(1, &viewport);
         renderState.commandList->RSSetScissorRects(1, &scissorRect);
 
@@ -1121,12 +1133,12 @@ int main(void)
         //  draw max detail mesh here?
 
         // NOTE: start at 1 for clipmap rings only
-    
+
         v3 cmFwd2D = cameraForward;
-        cmFwd2D.y = 0; // for ground level 
+        cmFwd2D.y = 0; // for ground level
         cmFwd2D = v3::normalised(cmFwd2D);
-        
-        v3 clipmapCentreLocation = cameraPos + cmFwd2D*(terrainGridDimensionInWorldUnits/2);
+
+        v3 clipmapCentreLocation = cameraPos + cmFwd2D * (terrainGridDimensionInWorldUnits / 2);
 
         for (int i = 0; i < activeClipmapRings; ++i)
         {
