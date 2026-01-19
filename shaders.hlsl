@@ -7,7 +7,8 @@ cbuffer SceneConstantBuffer : register(b0)
     float2 ringOffset;
     float ringWorldSize;
     float ringSampleStep;    
-    float planetScaleRatio;    
+    float planetScaleRatio;   
+    int terrainGridDimensionInVertices;
 };
 
 struct VSOut
@@ -15,29 +16,68 @@ struct VSOut
     float4 position : SV_POSITION;
     float3 worldPos : TEXCOORD0;
     float2 uv       : TEXCOORD1;    
-    float3 normalWS : TEXCOORD2;    
-    float water : TEXCOORD3;
+    float3 normalWS : TEXCOORD2;        
+    float2 water : TEXCOORD3;
 };
 
 Texture2D g_texture : register(t0);
 SamplerState g_sampler : register(s0);
 
-VSOut VSMain(float3 position : POSITION, float2 uv : TEXCOORD, float3 norm : NORMAL)
-{
+// VSOut VSMain(float3 position : POSITION, float2 uv : TEXCOORD, float3 norm : NORMAL)
+VSOut VSMain(float2 position : POSITION)
+{    
+    // int lodLevel = currentLodLevel*sampleLodLevelWithMipmaps;
+    int lodLevel = 0;
     VSOut o;
+    float4 wp = float4(position.x, 0.0f, position.y ,1.0f);
     
-    float gridDimSize = 128.0f;
-    float4 wp = mul(world, float4(position-gridDimSize/2.0f, 1.0f));        
-    // wp.xz *= ringWorldSize / gridDimSize;
+    float gridDimSize = terrainGridDimensionInVertices-1;
+    // wp.xz -= gridDimSize/2.0f - 0.5f;
+    wp.xz -= (gridDimSize+2)/2.0f;
     wp.xz *= ringSampleStep;
+
+
+    // wp.xz *= ringWorldSize / gridDimSize;
+    wp = mul(world, wp);
 
     float heightmapDim = 8192.0f;    
     float2 pUv = wp.xz + 0.5f + ringOffset;
     float2 terrainHeightmapUV = float2(1.0 - pUv.x, pUv.y) / heightmapDim;
-    float heightPointData = g_texture.SampleLevel(g_sampler, terrainHeightmapUV, 0).r;
+    float heightPointData = g_texture.SampleLevel(g_sampler, terrainHeightmapUV, lodLevel).r;
     float artistScale = (5000.0f*0.02f); //controlled by human hand, dependent on heightmap
     // float artistScale = (5000.0f*0.2f); 
     wp.y = heightPointData*artistScale;
+
+    // float heightPointData = g_texture.SampleLevel(g_sampler, terrainHeightmapUV, lodLevel).r;
+    // float artistScale = (5000.0f * 0.02f);
+    // float highHeight = heightPointData * artistScale;
+
+    // // --- morph factor near inner edge ---
+    // float2 local  = position.xz;
+    // float2 center = float2(gridDimSize * 0.5f, gridDimSize * 0.5f);
+    // float2 d      = abs(local - center);
+    // float dist    = max(d.x, d.y);
+
+    // float innerStart = (gridDimSize * 0.5f) - 4.0f;
+    // float innerEnd   = (gridDimSize * 0.5f);
+    // float morph = saturate((dist - innerStart) / (innerEnd - innerStart));
+    // morph *= step(1.5f, ringSampleStep); // only outer rings
+
+    // // --- parent LOD sample ---
+    // float parentStep = ringSampleStep * 2.0f;
+    // float2 worldXZ   = wp.xz + ringOffset;
+    // float2 parentXZ  = floor(worldXZ / parentStep) * parentStep;
+
+    // float2 parentPUv = parentXZ + 0.5f;
+    // float2 parentUV  = float2(1.0 - parentPUv.x, parentPUv.y) / heightmapDim;
+
+    // float parentHeightData = g_texture.SampleLevel(g_sampler, parentUV, lodLevel).r;
+    // float lowHeight = parentHeightData * artistScale;
+
+    // // final height
+    // float finalHeight = lerp(highHeight, lowHeight, morph);
+    // wp.y = finalHeight;
+
     
     float3 worldPos = wp.xyz;
     worldPos.x += ringOffset.x;
@@ -47,10 +87,10 @@ VSOut VSMain(float3 position : POSITION, float2 uv : TEXCOORD, float3 norm : NOR
     float texelWorld = ringSampleStep;                 // world units between samples
     float texelUV    = texelWorld / heightmapDim;      // UV offset that matches world spacing
 
-    float hL = g_texture.SampleLevel(g_sampler, terrainHeightmapUV + float2(-texelUV, 0), 0).r * artistScale;
-    float hR = g_texture.SampleLevel(g_sampler, terrainHeightmapUV + float2( texelUV, 0), 0).r * artistScale;
-    float hD = g_texture.SampleLevel(g_sampler, terrainHeightmapUV + float2(0, -texelUV), 0).r * artistScale;
-    float hU = g_texture.SampleLevel(g_sampler, terrainHeightmapUV + float2(0,  texelUV), 0).r * artistScale;
+    float hL = g_texture.SampleLevel(g_sampler, terrainHeightmapUV + float2(-texelUV, 0), lodLevel).r * artistScale;
+    float hR = g_texture.SampleLevel(g_sampler, terrainHeightmapUV + float2( texelUV, 0), lodLevel).r * artistScale;
+    float hD = g_texture.SampleLevel(g_sampler, terrainHeightmapUV + float2(0, -texelUV), lodLevel).r * artistScale;
+    float hU = g_texture.SampleLevel(g_sampler, terrainHeightmapUV + float2(0,  texelUV), lodLevel).r * artistScale;
 
     
     float worldDelta = texelWorld * 2.0f; // distance between left and right sample in world units
@@ -62,21 +102,22 @@ VSOut VSMain(float3 position : POSITION, float2 uv : TEXCOORD, float3 norm : NOR
     float seaTex = 1.9f / 100.0f;   // your actual water level in texture space
     float seaLevel = seaTex * artistScale;
 
-    o.water = step(wp.y, seaLevel);
+    o.water.x = step(wp.y, seaLevel);
+    o.water.y = heightPointData;
 
 
 
     // lower centre of the grid so they dont overlay (major greedy DONT KEEP THIS !!!!!!!)
     // TODO: use actual ring meshes like a normal person
-    float2 local  = position.xz;
-    float2 center = float2(gridDimSize, gridDimSize) * 0.5f;    
-    float2 d = abs(local - center);
-    float dist = max(d.x, d.y);    
-    float innerHalf = (gridDimSize-1) * 0.25f; // central 32x32 region    
-    float inside = step(dist, innerHalf);    
-    float isOuter = step(1.5f, ringSampleStep); // 1 if ringSampleStep >= 2
-    float maxDrop = 50.0f;
-    worldPos.y -= maxDrop * inside * isOuter;
+    // float2 local  = position.xz;
+    // float2 center = float2(gridDimSize, gridDimSize) * 0.5f;    
+    // float2 d = abs(local - center);
+    // float dist = max(d.x, d.y);    
+    // float innerHalf = (gridDimSize-1) * 0.25f; // central 32x32 region    
+    // float inside = step(dist, innerHalf);    
+    // float isOuter = step(1.5f, ringSampleStep); // 1 if ringSampleStep >= 2
+    // float maxDrop = 50.0f;
+    // worldPos.y -= maxDrop * inside * isOuter;
 
 
     // camera-relative curvature (visual only)
@@ -90,7 +131,7 @@ VSOut VSMain(float3 position : POSITION, float2 uv : TEXCOORD, float3 norm : NOR
     worldPos.y += curvatureOffset;
     wp = float4(worldPos, 1.0f);
     
-    float3 normalWS = mul((float3x3)world, norm);    
+    // float3 normalWS = mul((float3x3)world, norm);    
     // o.normalWS = normalize(normalWS);
     o.normalWS = n;
 
@@ -98,7 +139,7 @@ VSOut VSMain(float3 position : POSITION, float2 uv : TEXCOORD, float3 norm : NOR
     o.position = mul(projection, viewPos);
 
     o.worldPos = worldPos;
-    o.uv = uv;
+    // o.uv = uv;
     
     return o;
 }
@@ -112,10 +153,12 @@ float4 PSMain(VSOut IN) : SV_Target
 
     // float4 albedo = g_texture.Sample(g_sampler, IN.uv);
     // float4 albedo = float4(0.8f,0.75f,0.5f,1.0f);
-    float3 landColor  = float3(0.8f, 0.75f, 0.5f);
-    float3 waterColor = float3(0.0f, 0.3f, 0.8f);
+    // float3 wetlandColour = float3(0.8f, 0.75f, 0.5f) / 5.0f; 
+    float wetness = clamp(IN.water.y*5, 0.25f, 1.0f);
+    float3 landColor = float3(0.8f, 0.75f, 0.5f) * wetness;
+    float3 waterColor = lerp(float3(0.0f, 0.3f, 0.8f), landColor, 0.5f);
 
-    float3 base = lerp(landColor, waterColor, IN.water);
+    float3 base = lerp(landColor, waterColor, IN.water.x);    
     float4 albedo = float4(base, 1.0f);
 
 

@@ -28,6 +28,7 @@ static struct
     float ringWorldSize;
     float ringSampleStep;
     float planetScaleRatio = 1.0f / 75.0f;    
+    int terrainGridDimensionInVertices;
 } constantBufferData;
 
 struct vertex
@@ -35,6 +36,10 @@ struct vertex
     DirectX::XMFLOAT3 position;
     DirectX::XMFLOAT2 texCoords;
     DirectX::XMFLOAT3 normals;
+};
+
+struct vertex_optimised_heightmap {
+    DirectX::XMFLOAT2 position;     
 };
 
 // Simple free list based allocator
@@ -157,7 +162,7 @@ struct d3d12_vertex_buffer
     D3D12_VERTEX_BUFFER_VIEW vertexBufferView;
     ID3D12Resource *vertexBuffer = nullptr;
 
-    bool create_and_upload(size_t vertexBufferSize, void *terrainPoints)
+    bool create_and_upload(size_t vertexBufferSize, void *terrainPoints, UINT stride=sizeof(vertex))
     {
         // FROM MICROSOFT:
         // Note: using upload heaps to transfer static data like vert buffers is not
@@ -185,7 +190,7 @@ struct d3d12_vertex_buffer
         vertexBuffer->Unmap(0, nullptr);
 
         vertexBufferView.BufferLocation = vertexBuffer->GetGPUVirtualAddress();
-        vertexBufferView.StrideInBytes = sizeof(vertex);
+        vertexBufferView.StrideInBytes = stride;
         vertexBufferView.SizeInBytes = vertexBufferSize;
         return true;
     }

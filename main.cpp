@@ -43,6 +43,74 @@
 #define PI 3.1415926535897932384626433832795f
 #define PI_OVER_2 1.5707963267948966192313216916398f
 
+struct clipmap_mesh_data
+{
+    uint32_t *indexData;
+    size_t indexBufferDataSize;
+    uint32_t indexCount;
+};
+
+clipmap_mesh_data GenerateClipmapMeshData(int N, bool fillHole)
+{
+    clipmap_mesh_data result = {};
+    // const int N = terrainGridDimensionInVertices;
+    int quadsPerRow = N - 1;
+    int quadsTotal = quadsPerRow * quadsPerRow;
+    int indicesPerQuad = 6;
+    uint32_t indexCount = quadsTotal * indicesPerQuad;
+    size_t indexBufferDataSize = indexCount * sizeof(uint32_t);
+
+    size_t maxIndexCount = (N - 1) * (N - 1) * 6;
+    indexBufferDataSize = maxIndexCount * sizeof(uint32_t);
+    uint32_t *indices = (uint32_t *)SDL_malloc(indexBufferDataSize);
+
+    int idx = 0;
+
+    int innerSize = N / 2 - 1; // example: hole is N/4 wide
+    if (fillHole)
+        innerSize = 0;
+    int innerHalf = innerSize / 2;
+
+    int cx = N / 2; // grid center
+    int cy = N / 2;
+
+    for (int y = 0; y < N - 1; ++y)
+    {
+        for (int x = 0; x < N - 1; ++x)
+        {
+            // Compute quad center in grid space
+            int qx = x + 0.5f;
+            int qy = y + 0.5f;
+
+            // Check if quad is inside the hollow center
+            bool insideX = abs(qx - cx) < innerHalf;
+            bool insideY = abs(qy - cy) < innerHalf;
+
+            if (insideX && insideY)
+                continue; // skip this quad entirely
+
+            uint32_t v0 = x + y * N;
+            uint32_t v1 = (x + 1) + y * N;
+            uint32_t v2 = x + (y + 1) * N;
+            uint32_t v3 = (x + 1) + (y + 1) * N;
+
+            // tri 1
+            indices[idx++] = v0;
+            indices[idx++] = v2;
+            indices[idx++] = v1;
+
+            // tri 2
+            indices[idx++] = v1;
+            indices[idx++] = v2;
+            indices[idx++] = v3;
+        }
+    }
+    result.indexData = indices;
+    result.indexBufferDataSize = idx * sizeof(uint32_t);
+    result.indexCount = idx;
+    return result;
+}
+
 inline float randf()
 {
     return (float)rand() / (float)RAND_MAX;
@@ -72,7 +140,7 @@ int main(void)
 {
     // todo game state struct:
     // static v3 cameraPos = {4096.0f, 120.0f, 4096.0f};
-    static v3 cameraPos = {0.0f, 120.0f, 0.0f};
+    static v3 cameraPos = {0.0f, 20.0f, 0.0f};
     static float cameraYaw = 2.45f;
     static float cameraPitch = 0.0f;
 
@@ -401,11 +469,20 @@ int main(void)
         return 1;
     }
 
+    // old mesh stuff
+    // D3D12_INPUT_ELEMENT_DESC inputElementDesc[] =
+    //     {
+    //         {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+    //         {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+    //         {"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 20, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0}};
+
+    // heightmap mesh stuff
     D3D12_INPUT_ELEMENT_DESC inputElementDesc[] =
         {
-            {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
-            {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
-            {"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 20, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0}};
+            {"POSITION", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+            // {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+            // {"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 20, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0}
+        };
 
     D3D12_RASTERIZER_DESC rasterizerDesc = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
     // rasterizerDesc.FillMode = D3D12_FILL_MODE_WIREFRAME;
@@ -453,69 +530,101 @@ int main(void)
         return 1;
     }
 
+    const int terrainGridDimensionInVertices = 256 + 1;
+    constantBufferData.terrainGridDimensionInVertices = terrainGridDimensionInVertices;
     d3d12_vertex_buffer terrainGridVB;
-    const int terrainGridDimensionInVertices = 128;
+    // float baseGridSize = terrainGridDimensionInVertices; // world units
     const int terrainGridVertexCount = terrainGridDimensionInVertices * terrainGridDimensionInVertices;
-    const size_t terrainGridVertexDataSize = terrainGridVertexCount * sizeof(vertex);
-    vertex *terrainGridVertexData = (vertex *)SDL_malloc(terrainGridVertexDataSize);
+    const size_t terrainGridVertexDataSize = terrainGridVertexCount * sizeof(vertex_optimised_heightmap);
+    vertex_optimised_heightmap *terrainGridVertexData = (vertex_optimised_heightmap *)SDL_malloc(terrainGridVertexDataSize);
     for (int y = 0; y < terrainGridDimensionInVertices; ++y)
     {
         for (int x = 0; x < terrainGridDimensionInVertices; ++x)
         {
-            vertex v = {};
+            vertex_optimised_heightmap v = {};
             v.position.x = x;
-            v.position.y = 0;
-            v.position.z = y;
+            v.position.y = y;
+            // v.position.z = y;
 
             terrainGridVertexData[x + y * terrainGridDimensionInVertices] = v;
         }
     }
-    if (!terrainGridVB.create_and_upload(terrainGridVertexDataSize, terrainGridVertexData))
+    if (!terrainGridVB.create_and_upload(terrainGridVertexDataSize, terrainGridVertexData, sizeof(vertex_optimised_heightmap)))
     {
         err("Failed to create or upload terrain grid mesh");
         return 1;
     }
 
-    d3d12_index_buffer terrainGridIB;
-    // Create index buffer for a 64x64 grid
-    const int N = terrainGridDimensionInVertices; // 64
-    const int quadsPerRow = N - 1;
-    const int quadsTotal = quadsPerRow * quadsPerRow;
-    const int indicesPerQuad = 6;
-    const int indexCount = quadsTotal * indicesPerQuad;
-    const size_t indexBufferDataSize = indexCount * sizeof(uint32_t);
+    // const int N = terrainGridDimensionInVertices;
+    // const int quadsPerRow = N - 1;
+    // const int quadsTotal = quadsPerRow * quadsPerRow;
+    // const int indicesPerQuad = 6;
+    // const int indexCount = quadsTotal * indicesPerQuad;
+    // size_t indexBufferDataSize = indexCount * sizeof(uint32_t);
 
-    uint32_t *indices = (uint32_t *)SDL_malloc(indexBufferDataSize);
+    // size_t maxIndexCount = (N - 1) * (N - 1) * 6;
+    // indexBufferDataSize = maxIndexCount * sizeof(uint32_t);
+    // uint32_t *indices = (uint32_t *)SDL_malloc(indexBufferDataSize);
 
-    int idx = 0;
+    // int idx = 0;
 
-    for (int y = 0; y < N - 1; ++y)
+    // // int innerSize = N / 2 - 1; // example: hole is N/4 wide
+    // int innerSize = 0;
+    // int innerHalf = innerSize / 2;
+
+    // int cx = N / 2; // grid center
+    // int cy = N / 2;
+
+    // for (int y = 0; y < N - 1; ++y)
+    // {
+    //     for (int x = 0; x < N - 1; ++x)
+    //     {
+    //         // Compute quad center in grid space
+    //         int qx = x + 0.5f;
+    //         int qy = y + 0.5f;
+
+    //         // Check if quad is inside the hollow center
+    //         bool insideX = abs(qx - cx) < innerHalf;
+    //         bool insideY = abs(qy - cy) < innerHalf;
+
+    //         if (insideX && insideY)
+    //             continue; // skip this quad entirely
+
+    //         uint32_t v0 = x + y * N;
+    //         uint32_t v1 = (x + 1) + y * N;
+    //         uint32_t v2 = x + (y + 1) * N;
+    //         uint32_t v3 = (x + 1) + (y + 1) * N;
+
+    //         // tri 1
+    //         indices[idx++] = v0;
+    //         indices[idx++] = v2;
+    //         indices[idx++] = v1;
+
+    //         // tri 2
+    //         indices[idx++] = v1;
+    //         indices[idx++] = v2;
+    //         indices[idx++] = v3;
+    //     }
+    // }
+
+    d3d12_index_buffer terrainGridCentreIB;
+    clipmap_mesh_data clipmapCentre = GenerateClipmapMeshData(terrainGridDimensionInVertices, true);
+    if (!terrainGridCentreIB.create_and_upload(clipmapCentre.indexBufferDataSize, clipmapCentre.indexData))
     {
-        for (int x = 0; x < N - 1; ++x)
-        {
-            uint32_t v0 = x + y * N;
-            uint32_t v1 = (x + 1) + y * N;
-            uint32_t v2 = x + (y + 1) * N;
-            uint32_t v3 = (x + 1) + (y + 1) * N;
-
-            // tri 1
-            indices[idx++] = v0;
-            indices[idx++] = v2;
-            indices[idx++] = v1;
-
-            // tri 2
-            indices[idx++] = v1;
-            indices[idx++] = v2;
-            indices[idx++] = v3;
-        }
-    }
-    if (!terrainGridIB.create_and_upload(indexBufferDataSize, indices))
-    {
-        err("Failed to create or upload terrain grid index buffer");
+        err("Failed to create or upload terrain grid index buffer (centre piece)");
         return 1;
     }
 
-    const int maxClipmapRings = 8; // for terrain
+    d3d12_index_buffer terrainGridRingIB;
+    clipmap_mesh_data clipmapRing = GenerateClipmapMeshData(terrainGridDimensionInVertices, false);
+    if (!terrainGridRingIB.create_and_upload(clipmapRing.indexBufferDataSize, clipmapRing.indexData))
+    {
+        err("Failed to create or upload terrain grid index buffer (ring piece)");
+        return 1;
+    }
+
+    int maxClipmapRings = 8; // for terrain
+    int activeClipmapRings = 6;
     // TODO: make reusuable constant buffer stuff
 
     // create constant buffer
@@ -783,9 +892,13 @@ int main(void)
                         1000.0f / ImGui::GetIO().Framerate,
                         ImGui::GetIO().Framerate);
 
+            ImGui::Text("Terrain Dimension vertices: %d", constantBufferData.terrainGridDimensionInVertices);
+
             static int planetScaleRatioDenom = 50;
             ImGui::SliderInt("Planet Scale 1:X", &planetScaleRatioDenom, 1, 100);
             constantBufferData.planetScaleRatio = 1.0f / (float)planetScaleRatioDenom;
+
+            ImGui::SliderInt("Clipmaps", &activeClipmapRings, 1, maxClipmapRings);
 
             // basic profiling
             ImGui::SliderFloat("Debug Speed Boost", &debugBoostSpeed, 1.0f, 1000.0f, "%.3f", ImGuiSliderFlags_Logarithmic);
@@ -803,11 +916,11 @@ int main(void)
 
             // FPS values
             profiling.update_fps();
-            ImGui::Text("1%% Low:  %.2f FPS", profiling.fps_1pct_low);
-            ImGui::Text("0.1%% Low:%.2f FPS", profiling.fps_01pct_low);
-            ImGui::Text("Peak:    %.2f FPS", profiling.fps_peak);
-            ImGui::Text("Min:     %.2f FPS", profiling.fps_min);
-            ImGui::Text("Max:     %.2f FPS", profiling.fps_max);
+            ImGui::Text("1%% Low:  %.2f FPS, %.3f ms", profiling.fps_1pct_low, 1000.0f / profiling.fps_1pct_low);
+            ImGui::Text("0.1%% Low:%.2f FPS, %.3f ms", profiling.fps_01pct_low, 1000.0f / profiling.fps_01pct_low);
+            ImGui::Text("Peak:    %.2f FPS, %.3f ms", profiling.fps_peak, 1000.0f / profiling.fps_peak);
+            ImGui::Text("Min:     %.2f FPS, %.3f ms", profiling.fps_min, 1000.0f / profiling.fps_min);
+            ImGui::Text("Max:     %.2f FPS, %.3f ms", profiling.fps_max, 1000.0f / profiling.fps_max);
 
             ImGui::Text("Update:  %.3f ms", profiling.update_ms);
             ImGui::Text("Render:  %.3f ms", profiling.render_ms);
@@ -1001,19 +1114,23 @@ int main(void)
 
         renderState.commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         renderState.commandList->IASetVertexBuffers(0, 1, &terrainGridVB.vertexBufferView);
-        renderState.commandList->IASetIndexBuffer(&terrainGridIB.indexBufferView);
         // renderState.commandList->SetGraphicsRootConstantBufferView(0, renderState.constantBuffer->GetGPUVirtualAddress());
 
-        float baseGridSize = terrainGridDimensionInVertices; // world units
-        for (int i = 0; i < maxClipmapRings; ++i)
+        // TODO:
+        //  draw max detail mesh here?
+
+        // NOTE: start at 1 for clipmap rings only
+
+        for (int i = 0; i < activeClipmapRings; ++i)
         {
             float lodScale = (float)(1 << i);
-            constantBufferData.ringWorldSize = baseGridSize * lodScale;
-            constantBufferData.ringSampleStep = lodScale;            
+            // constantBufferData.ringWorldSize = baseGridSize * lodScale;
+            constantBufferData.ringSampleStep = lodScale;
 
             // Snap camera position to sample grid to avoid jitter
             float snappedX = floor(cameraPos.x / lodScale) * lodScale;
             float snappedZ = floor(cameraPos.z / lodScale) * lodScale;
+
             constantBufferData.ringOffset.x = snappedX;
             constantBufferData.ringOffset.y = snappedZ;
 
@@ -1026,7 +1143,18 @@ int main(void)
             memcpy(reinterpret_cast<byte *>(CbvDataBegin) + cbOffset, &constantBufferData, sizeof(constantBufferData));
             renderState.commandList->SetGraphicsRootConstantBufferView(0, renderState.constantBuffer->GetGPUVirtualAddress() + cbOffset);
 
-            renderState.commandList->DrawIndexedInstanced(indexCount, 1, 0, 0, 0);
+            UINT localIndexCount = clipmapRing.indexCount;
+            if (i == 0)
+            {
+                renderState.commandList->IASetIndexBuffer(&terrainGridCentreIB.indexBufferView);
+                localIndexCount = clipmapCentre.indexCount;
+            }
+            else
+            {
+                renderState.commandList->IASetIndexBuffer(&terrainGridRingIB.indexBufferView);
+                localIndexCount = clipmapRing.indexCount;
+            }
+            renderState.commandList->DrawIndexedInstanced(localIndexCount, 1, 0, 0, 0);
         }
 
         // bundle rendering
