@@ -531,6 +531,7 @@ int main(void)
     }
 
     const int terrainGridDimensionInVertices = 256 + 1;
+    float terrainGridDimensionInWorldUnits = terrainGridDimensionInVertices - 1;
     constantBufferData.terrainGridDimensionInVertices = terrainGridDimensionInVertices;
     d3d12_vertex_buffer terrainGridVB;
     // float baseGridSize = terrainGridDimensionInVertices; // world units
@@ -624,7 +625,7 @@ int main(void)
     }
 
     int maxClipmapRings = 8; // for terrain
-    int activeClipmapRings = 6;
+    int activeClipmapRings = 5;
     // TODO: make reusuable constant buffer stuff
 
     // create constant buffer
@@ -1031,7 +1032,7 @@ int main(void)
         strafeSpeed = inputMotionXAxis * deltaTime * debugBoostSpeed;
 
         cameraPos = cameraPos + (cameraForward * forwardSpeed);
-        cameraPos = cameraPos + (cameraRight * strafeSpeed);
+        cameraPos = cameraPos + (cameraRight * strafeSpeed);        
 
         QueryPerformanceCounter(&profiling.t1);
 
@@ -1120,6 +1121,12 @@ int main(void)
         //  draw max detail mesh here?
 
         // NOTE: start at 1 for clipmap rings only
+    
+        v3 cmFwd2D = cameraForward;
+        cmFwd2D.y = 0; // for ground level 
+        cmFwd2D = v3::normalised(cmFwd2D);
+        
+        v3 clipmapCentreLocation = cameraPos + cmFwd2D*(terrainGridDimensionInWorldUnits/2);
 
         for (int i = 0; i < activeClipmapRings; ++i)
         {
@@ -1128,8 +1135,8 @@ int main(void)
             constantBufferData.ringSampleStep = lodScale;
 
             // Snap camera position to sample grid to avoid jitter
-            float snappedX = floor(cameraPos.x / lodScale) * lodScale;
-            float snappedZ = floor(cameraPos.z / lodScale) * lodScale;
+            float snappedX = floor(clipmapCentreLocation.x / lodScale) * lodScale;
+            float snappedZ = floor(clipmapCentreLocation.z / lodScale) * lodScale;
 
             constantBufferData.ringOffset.x = snappedX;
             constantBufferData.ringOffset.y = snappedZ;
