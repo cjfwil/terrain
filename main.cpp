@@ -132,6 +132,7 @@ static struct
     SDL_Window *window;
     Uint64 msElapsedSinceSDLInit;
     uint64_t ticksElapsed = 0;
+    double timeElapsed = 0;
     bool fullscreen;
     bool isRunning;
 } programState;
@@ -140,7 +141,7 @@ int main(void)
 {
     // todo game state struct:
     // static v3 cameraPos = {4096.0f, 120.0f, 4096.0f};
-    static v3 cameraPos = {0.0f, 20.0f, 0.0f};
+    static v3 cameraPos = {0.0f, 80.0f, 0.0f};
     static float cameraYaw = 2.45f;
     static float cameraPitch = 0.0f;
 
@@ -444,29 +445,18 @@ int main(void)
     }
 
     // create pipeline state (including shaders)
-#if defined(_DEBUG)
-    // Enable better shader debugging with the graphics debugging tools.
-    UINT compileFlags = D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
-#else
-    UINT compileFlags = 0;
-#endif
-
-    ID3DBlob *vsError = nullptr;
-    hr = D3DCompileFromFile(L"shaders.hlsl", nullptr, nullptr, "VSMain", "vs_5_0", compileFlags, 0, &renderState.vertexShader, &vsError);
-    if (FAILED(hr))
+    // create shaders here
+    d3d12_shader_pair terrainShaderPair;
+    if (!terrainShaderPair.create(L"shaders.hlsl"))
     {
-        errhr("D3DCompile from file failed (vertex shader)", hr);
-        if (vsError)
-        {
-            SDL_Log((char *)vsError->GetBufferPointer());
-            vsError->Release();
-        }
+        err("Failed to create shader pair.");
         return 1;
     }
-    hr = D3DCompileFromFile(L"shaders.hlsl", nullptr, nullptr, "PSMain", "ps_5_0", compileFlags, 0, &renderState.pixelShader, nullptr);
-    if (FAILED(hr))
+
+    d3d12_shader_pair skyShader;
+    if (!skyShader.create(L"sky.hlsl"))
     {
-        errhr("D3DCompile from file failed (pixel shader)", hr);
+        err("Failed to create sky shader pair");
         return 1;
     }
 
@@ -489,28 +479,18 @@ int main(void)
     // rasterizerDesc.FillMode = D3D12_FILL_MODE_WIREFRAME;
     // rasterizerDesc.CullMode = D3D12_CULL_MODE_NONE; // Disable culling (backface culling)
 
-    D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
-    psoDesc.InputLayout = {inputElementDesc, _countof(inputElementDesc)};
-    psoDesc.pRootSignature = renderState.rootSignature;
-    psoDesc.VS = CD3DX12_SHADER_BYTECODE(renderState.vertexShader);
-    psoDesc.PS = CD3DX12_SHADER_BYTECODE(renderState.pixelShader);
-    psoDesc.RasterizerState = rasterizerDesc;
-    psoDesc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
-    psoDesc.DepthStencilState.DepthEnable = TRUE;
-    psoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
-    psoDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS;
-    psoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
-    psoDesc.DepthStencilState.StencilEnable = FALSE;
-    psoDesc.SampleMask = UINT_MAX;
-    psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-    psoDesc.NumRenderTargets = 1;
-    psoDesc.RTVFormats[0] = renderState.rtvFormat;
-    psoDesc.SampleDesc.Count = 1;
-
-    hr = renderState.device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&renderState.pipelineState));
-    if (FAILED(hr))
+    d3d12_pipeline_state terrainPSO;
+    D3D12_INPUT_LAYOUT_DESC inputLayout = {inputElementDesc, _countof(inputElementDesc)};
+    if (!terrainPSO.create(inputLayout, &terrainShaderPair, rasterizerDesc, true))
     {
-        errhr("CreateGraphicsPipelineState failed", hr);
+        err("Failed to create terrain pipleline state");
+        return 1;
+    }
+
+    d3d12_pipeline_state skyPSO;
+    if (!skyPSO.create({nullptr, 0}, &skyShader, CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT), false))
+    {
+        err("Failed to create sky pipleline state");
         return 1;
     }
 
@@ -531,83 +511,30 @@ int main(void)
         return 1;
     }
 
-    const int terrainGridDimensionInVertices = 128 + 1;
+    const int terrainGridDimensionInVertices = 256 + 1;
     float terrainGridDimensionInWorldUnits = terrainGridDimensionInVertices - 1;
     constantBufferData.terrainGridDimensionInVertices = terrainGridDimensionInVertices;
     d3d12_vertex_buffer terrainGridVB;
     // float baseGridSize = terrainGridDimensionInVertices; // world units
     const int terrainGridVertexCount = terrainGridDimensionInVertices * terrainGridDimensionInVertices;
-    const size_t terrainGridVertexDataSize = terrainGridVertexCount * sizeof(vertex_optimised_heightmap);
-    vertex_optimised_heightmap *terrainGridVertexData = (vertex_optimised_heightmap *)SDL_malloc(terrainGridVertexDataSize);
+    const size_t terrainGridVertexDataSize = terrainGridVertexCount * sizeof(vertex_optimised);
+    vertex_optimised *terrainGridVertexData = (vertex_optimised *)SDL_malloc(terrainGridVertexDataSize);
     for (int y = 0; y < terrainGridDimensionInVertices; ++y)
     {
         for (int x = 0; x < terrainGridDimensionInVertices; ++x)
         {
-            vertex_optimised_heightmap v = {};
+            vertex_optimised v = {};
             v.x = x;
             v.y = y;
-            // v.position.z = y;
 
             terrainGridVertexData[x + y * terrainGridDimensionInVertices] = v;
         }
     }
-    if (!terrainGridVB.create_and_upload(terrainGridVertexDataSize, terrainGridVertexData, sizeof(vertex_optimised_heightmap)))
+    if (!terrainGridVB.create_and_upload(terrainGridVertexDataSize, terrainGridVertexData, sizeof(vertex_optimised)))
     {
         err("Failed to create or upload terrain grid mesh");
         return 1;
     }
-
-    // const int N = terrainGridDimensionInVertices;
-    // const int quadsPerRow = N - 1;
-    // const int quadsTotal = quadsPerRow * quadsPerRow;
-    // const int indicesPerQuad = 6;
-    // const int indexCount = quadsTotal * indicesPerQuad;
-    // size_t indexBufferDataSize = indexCount * sizeof(uint32_t);
-
-    // size_t maxIndexCount = (N - 1) * (N - 1) * 6;
-    // indexBufferDataSize = maxIndexCount * sizeof(uint32_t);
-    // uint32_t *indices = (uint32_t *)SDL_malloc(indexBufferDataSize);
-
-    // int idx = 0;
-
-    // // int innerSize = N / 2 - 1; // example: hole is N/4 wide
-    // int innerSize = 0;
-    // int innerHalf = innerSize / 2;
-
-    // int cx = N / 2; // grid center
-    // int cy = N / 2;
-
-    // for (int y = 0; y < N - 1; ++y)
-    // {
-    //     for (int x = 0; x < N - 1; ++x)
-    //     {
-    //         // Compute quad center in grid space
-    //         int qx = x + 0.5f;
-    //         int qy = y + 0.5f;
-
-    //         // Check if quad is inside the hollow center
-    //         bool insideX = abs(qx - cx) < innerHalf;
-    //         bool insideY = abs(qy - cy) < innerHalf;
-
-    //         if (insideX && insideY)
-    //             continue; // skip this quad entirely
-
-    //         uint32_t v0 = x + y * N;
-    //         uint32_t v1 = (x + 1) + y * N;
-    //         uint32_t v2 = x + (y + 1) * N;
-    //         uint32_t v3 = (x + 1) + (y + 1) * N;
-
-    //         // tri 1
-    //         indices[idx++] = v0;
-    //         indices[idx++] = v2;
-    //         indices[idx++] = v1;
-
-    //         // tri 2
-    //         indices[idx++] = v1;
-    //         indices[idx++] = v2;
-    //         indices[idx++] = v3;
-    //     }
-    // }
 
     d3d12_index_buffer terrainGridCentreIB;
     clipmap_mesh_data clipmapCentre = GenerateClipmapMeshData(terrainGridDimensionInVertices, true);
@@ -660,7 +587,7 @@ int main(void)
     memcpy(CbvDataBegin, &constantBufferData, sizeof(constantBufferData));
 
     // CREATE BUNDLE
-    hr = renderState.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_BUNDLE, renderState.bundleAllocator, renderState.pipelineState, IID_PPV_ARGS(&renderState.bundle));
+    hr = renderState.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_BUNDLE, renderState.bundleAllocator, terrainPSO.pipelineState, IID_PPV_ARGS(&renderState.bundle));
     if (FAILED(hr))
     {
         errhr("CreateCommandList failed", hr);
@@ -692,7 +619,7 @@ int main(void)
     }
 
     d3d12_texture albedoTexture;
-    if (!albedoTexture.create(L"greece_albedo.dds", false, 1))
+    if (!albedoTexture.create(L"greece_albedo.dds", true, 1))
     {
         err("Create texture failed");
         return 1;
@@ -1080,7 +1007,7 @@ int main(void)
             errhr("Reset failed (command allocators)", hr);
             return 1;
         }
-        hr = renderState.commandList->Reset(renderState.commandAllocators[frameIndex], renderState.pipelineState);
+        hr = renderState.commandList->Reset(renderState.commandAllocators[frameIndex], terrainPSO.pipelineState);
         if (FAILED(hr))
         {
             errhr("Reset failed (command list)", hr);
@@ -1122,11 +1049,22 @@ int main(void)
         renderState.commandList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
 
         // non bundle rendering
+
+        // sky render
+        renderState.commandList->SetPipelineState(skyPSO.pipelineState);
+        renderState.commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        renderState.commandList->IASetVertexBuffers(0, 0, nullptr);
+        renderState.commandList->IASetIndexBuffer(nullptr);
+        renderState.commandList->DrawInstanced(3, 1, 0, 0);
+
+        // terrain render
+        renderState.commandList->SetPipelineState(terrainPSO.pipelineState);
         if (baked_heightmap_mesh.created)
             baked_heightmap_mesh.draw(cameraPos);
 
         renderState.commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         renderState.commandList->IASetVertexBuffers(0, 1, &terrainGridVB.vertexBufferView);
+
         // renderState.commandList->SetGraphicsRootConstantBufferView(0, renderState.constantBuffer->GetGPUVirtualAddress());
 
         // TODO:
@@ -1230,7 +1168,10 @@ int main(void)
         fenceValues[frameIndex] = currentFenceValue + 1;
         // end of moving to next frame
 
+        programState.timeElapsed += deltaTime;
         programState.ticksElapsed++;
+        
+        constantBufferData.timeElapsed = programState.timeElapsed;
 
         QueryPerformanceCounter(&profiling.t3);
     }
@@ -1263,8 +1204,8 @@ int main(void)
     //     renderState.bundle->Release();
     // if (renderState.commandList)
     //     renderState.commandList->Release();
-    // if (renderState.pipelineState)
-    //     renderState.pipelineState->Release();
+    // if (terrainPSO.pipelineState)
+    //     terrainPSO.pipelineState->Release();
     // if (renderState.rootSignature)
     //     renderState.rootSignature->Release();
     // if (renderState.srvHeap)
@@ -1290,10 +1231,10 @@ int main(void)
     //     renderState.hardwareAdapter->Release();
     // if (renderState.factory)
     //     renderState.factory->Release();
-    // if (renderState.vertexShader)
-    //     renderState.vertexShader->Release();
-    // if (renderState.pixelShader)
-    //     renderState.pixelShader->Release();
+    // if (terrainShaderPair.vertexShader)
+    //     terrainShaderPair.vertexShader->Release();
+    // if (terrainShaderPair.pixelShader)
+    //     terrainShaderPair.pixelShader->Release();
     // if (signature)
     //     signature->Release();
     return (0);

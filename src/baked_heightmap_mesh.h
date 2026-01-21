@@ -183,7 +183,7 @@ struct
             }
         }
 
-        if (!terrainMeshVertexBuffer.create_and_upload(baked_heightmap_mesh.terrainPointsSize, baked_heightmap_mesh.terrainPoints))
+        if (!terrainMeshVertexBuffer.create_and_upload(baked_heightmap_mesh.terrainPointsSize, baked_heightmap_mesh.terrainPoints, sizeof(vertex)))
         {
             err("Terrain Mesh Vertex Buffer create and upload failed");
             return 1;

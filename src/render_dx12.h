@@ -22,12 +22,13 @@ static struct
 {
     DirectX::XMFLOAT4X4 world;
     DirectX::XMFLOAT4X4 view; // 4 x 4 matrix has 16 entries. 4 bytes per entry -> 64 bytes total
-    DirectX::XMFLOAT4X4 projection;
+    DirectX::XMFLOAT4X4 projection;    
     DirectX::XMVECTOR cameraPos;
     DirectX::XMFLOAT2 ringOffset;
+    double timeElapsed;
     float ringWorldSize;
     float ringSampleStep;
-    float planetScaleRatio = 1.0f / 75.0f;    
+    float planetScaleRatio = 1.0f / 75.0f;
     int terrainGridDimensionInVertices;
 } constantBufferData;
 
@@ -38,16 +39,17 @@ struct vertex
     DirectX::XMFLOAT3 normals;
 };
 
-struct vertex_optimised_heightmap {
+struct vertex_optimised
+{
     uint16_t x;
     uint16_t y;
 };
 
-//TODO ultra optimised heightmap for grids that are set to 129x129 vertices?
-// struct vertex_ultra_optimised_heightmap {
-//     uint8_t x;
-//     uint8_t y;
-// };
+// TODO ultra optimised heightmap for grids that are set to 129x129 vertices?
+//  struct vertex_ultra_optimised_heightmap {
+//      uint8_t x;
+//      uint8_t y;
+//  };
 
 // Simple free list based allocator
 struct ImGuiDescriptorHeapAllocator
@@ -115,10 +117,8 @@ static struct
     ID3D12CommandAllocator *bundleAllocator = nullptr;
     ID3D12RootSignature *rootSignature = nullptr;
     ID3D12Fence *fence = nullptr;
-    ID3D12PipelineState *pipelineState = nullptr;
     ID3D12GraphicsCommandList *commandList = nullptr;
-    ID3DBlob *vertexShader = nullptr;
-    ID3DBlob *pixelShader = nullptr;
+
     ID3D12Resource *constantBuffer = nullptr;
 
     ID3D12GraphicsCommandList *bundle = nullptr;
@@ -169,7 +169,8 @@ struct d3d12_vertex_buffer
     D3D12_VERTEX_BUFFER_VIEW vertexBufferView;
     ID3D12Resource *vertexBuffer = nullptr;
 
-    bool create_and_upload(size_t vertexBufferSize, void *terrainPoints, UINT stride=sizeof(vertex))
+    // stride == size of 1 vertex
+    bool create_and_upload(size_t vertexBufferSize, void *terrainPoints, UINT stride)
     {
         // FROM MICROSOFT:
         // Note: using upload heaps to transfer static data like vert buffers is not
@@ -209,7 +210,7 @@ struct d3d12_texture
     wchar_t *filename;
     UINT descriptorIndex = 0; // which SRV slot in the heap
 
-    bool create(wchar_t *_filename = L"gravel.dds", bool mipmaps = true, UINT srvIndex=0)
+    bool create(wchar_t *_filename = L"gravel.dds", bool mipmaps = true, UINT srvIndex = 0)
     {
         filename = _filename;
         descriptorIndex = srvIndex;
@@ -337,7 +338,7 @@ struct d3d12_texture
 
         D3D12_CPU_DESCRIPTOR_HANDLE srvHandleCPU =
             renderState.srvHeap->GetCPUDescriptorHandleForHeapStart();
-        srvHandleCPU.ptr += renderState.cbvSrvDescriptorSize*descriptorIndex;
+        srvHandleCPU.ptr += renderState.cbvSrvDescriptorSize * descriptorIndex;
 
         renderState.device->CreateShaderResourceView(
             texture,
@@ -347,6 +348,85 @@ struct d3d12_texture
         // TODO: Need proper allocator that releases and stuff after pending
         // NOTE: CURRENT MEMORY LEAK BUT DONT UNCOMMENT THIS LINE IT CRASHES
         // textureUploadHeap->Release();
+        return true;
+    }
+};
+
+struct d3d12_shader_pair
+{
+    ID3DBlob *vertexShader = nullptr;
+    ID3DBlob *pixelShader = nullptr;
+
+    bool create(LPCWSTR filename)
+    {
+#if defined(_DEBUG)
+        // Enable better shader debugging with the graphics debugging tools.
+        UINT compileFlags = D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
+#else
+        UINT compileFlags = 0;
+#endif
+
+        ID3DBlob *vsError = nullptr;
+        HRESULT hr = D3DCompileFromFile(filename, nullptr, nullptr, "VSMain", "vs_5_0", compileFlags, 0, &vertexShader, &vsError);
+        if (FAILED(hr))
+        {
+            errhr("D3DCompile from file failed (vertex shader)", hr);
+            if (vsError)
+            {
+                SDL_Log((char *)vsError->GetBufferPointer());
+                vsError->Release();
+            }
+            return false;
+        }
+        hr = D3DCompileFromFile(filename, nullptr, nullptr, "PSMain", "ps_5_0", compileFlags, 0, &pixelShader, nullptr);
+        if (FAILED(hr))
+        {
+            errhr("D3DCompile from file failed (pixel shader)", hr);
+            return false;
+        }
+        return true;
+    }
+};
+
+struct d3d12_pipeline_state
+{
+    ID3D12PipelineState *pipelineState = nullptr;
+
+    bool create(D3D12_INPUT_LAYOUT_DESC inputLayout, d3d12_shader_pair *shaderPair, D3D12_RASTERIZER_DESC rasterizerDesc, bool depthEnable)
+    {
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
+        psoDesc.InputLayout = inputLayout;
+        psoDesc.pRootSignature = renderState.rootSignature;
+        psoDesc.VS = CD3DX12_SHADER_BYTECODE(shaderPair->vertexShader);        
+        psoDesc.PS = CD3DX12_SHADER_BYTECODE(shaderPair->pixelShader);
+        psoDesc.RasterizerState = rasterizerDesc;
+        psoDesc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
+        psoDesc.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
+        psoDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS;            
+        // psoDesc.DepthStencilState.StencilEnable = FALSE; // TODO: what does this do
+        if (depthEnable)
+        {
+            psoDesc.DepthStencilState.DepthEnable = TRUE;
+            psoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+        }
+        else
+        {
+            psoDesc.DepthStencilState.DepthEnable = FALSE;
+            psoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;            
+        }
+        psoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
+        psoDesc.SampleMask = UINT_MAX;
+        psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+        psoDesc.NumRenderTargets = 1;
+        psoDesc.RTVFormats[0] = renderState.rtvFormat;
+        psoDesc.SampleDesc.Count = 1;
+
+        HRESULT hr = renderState.device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&pipelineState));
+        if (FAILED(hr))
+        {
+            errhr("CreateGraphicsPipelineState failed", hr);
+            return false;
+        }
         return true;
     }
 };

@@ -5,6 +5,7 @@ cbuffer SceneConstantBuffer : register(b0)
     float4x4 projection;
     float4 cameraPos;
     float2 ringOffset;
+    double timeElapsed;
     float ringWorldSize;
     float ringSampleStep;    
     float planetScaleRatio;   
@@ -32,27 +33,18 @@ VSOut VSMain(uint2 position : POSITION)
     VSOut o;
     float4 wp = float4(position.x, 0.0f, position.y ,1.0f);
     
-    float gridDimSize = terrainGridDimensionInVertices-1;
-    // wp.xz -= gridDimSize/2.0f - 0.5f;
+    float gridDimSize = terrainGridDimensionInVertices-1;    
     wp.xz -= (gridDimSize+2)/2.0f;
     wp.xz *= ringSampleStep;
-
-
-    // wp.xz *= ringWorldSize / gridDimSize;
+    
     wp = mul(world, wp);
-
-    // float heightmapDim = 8192.0f;    
+    
     float heightmapDim = 8192.0f*2; 
     float2 pUv = wp.xz + 0.5f + ringOffset;
     float2 terrainHeightmapUV = float2(1.0 - pUv.x, pUv.y) / heightmapDim;
-    float heightPointData = g_texture.SampleLevel(g_sampler, terrainHeightmapUV, lodLevel).r;
-    // float artistScale = (5000.0f*0.02f); //controlled by human hand, dependent on heightmap
-    float artistScale = (5000.0f*0.015f); 
+    float heightPointData = g_texture.SampleLevel(g_sampler, terrainHeightmapUV, lodLevel).r;    
+    float artistScale = (5000.0f*0.015f);  //controlled by human hand, dependent on heightmap
     wp.y = heightPointData*artistScale;
-
-    // float heightPointData = g_texture.SampleLevel(g_sampler, terrainHeightmapUV, lodLevel).r;
-    // float artistScale = (5000.0f * 0.02f);
-    // float highHeight = heightPointData * artistScale;
 
     // // --- morph factor near inner edge ---
     // float2 local  = position.xz;
