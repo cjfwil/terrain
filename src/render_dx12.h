@@ -21,22 +21,26 @@
 
 struct dxc_context
 {
-    IDxcUtils*        utils   = nullptr;
-    IDxcCompiler3*    compiler = nullptr;
-    IDxcIncludeHandler* includeHandler = nullptr;
+    IDxcUtils *utils = nullptr;
+    IDxcCompiler3 *compiler = nullptr;
+    IDxcIncludeHandler *includeHandler = nullptr;
 
     bool init()
     {
-        if (utils) return true; // already inited
+        if (utils)
+            return true; // already inited
 
         HRESULT hr = DxcCreateInstance(CLSID_DxcUtils, IID_PPV_ARGS(&utils));
-        if (FAILED(hr)) return false;
+        if (FAILED(hr))
+            return false;
 
         hr = DxcCreateInstance(CLSID_DxcCompiler, IID_PPV_ARGS(&compiler));
-        if (FAILED(hr)) return false;
+        if (FAILED(hr))
+            return false;
 
         hr = utils->CreateDefaultIncludeHandler(&includeHandler);
-        if (FAILED(hr)) return false;
+        if (FAILED(hr))
+            return false;
 
         return true;
     }
@@ -235,7 +239,7 @@ struct d3d12_vertex_buffer
     }
 };
 
-struct d3d12_texture
+struct d3d12_texture_2d
 {
     ID3D12Resource *texture = nullptr;
     wchar_t *filename;
@@ -383,6 +387,176 @@ struct d3d12_texture
     }
 };
 
+struct d3d12_texture_array
+{
+    ID3D12Resource *texture = nullptr; // The Texture2DArray resource
+    UINT descriptorIndex = 0;          // SRV slot in the descriptor heap
+
+    UINT width = 0;
+    UINT height = 0;
+    UINT slices = 0;
+    UINT mipLevels = 0;
+    DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
+
+    // Create the empty array resource + SRV
+    bool create(UINT _width,
+                UINT _height,
+                UINT _slices,
+                DXGI_FORMAT _format,
+                UINT _mipLevels,
+                UINT srvIndex)
+    {
+        width = _width;
+        height = _height;
+        slices = _slices;
+        mipLevels = _mipLevels;
+        format = _format;
+        descriptorIndex = srvIndex;
+
+        D3D12_RESOURCE_DESC desc = {};
+        desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        desc.Width = width;
+        desc.Height = height;
+        desc.DepthOrArraySize = (UINT16)slices;
+        desc.MipLevels = (UINT16)mipLevels;
+        desc.Format = format;
+        desc.SampleDesc.Count = 1;
+        desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+        desc.Flags = D3D12_RESOURCE_FLAG_NONE;
+
+        CD3DX12_HEAP_PROPERTIES heapPropsDefault(D3D12_HEAP_TYPE_DEFAULT);
+
+        HRESULT hr = renderState.device->CreateCommittedResource(
+            &heapPropsDefault,
+            D3D12_HEAP_FLAG_NONE,
+            &desc,
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            nullptr,
+            IID_PPV_ARGS(&texture));
+
+        if (FAILED(hr))
+        {
+            errhr("CreateCommittedResource (Texture2DArray)", hr);
+            return false;
+        }
+
+        // Create SRV for the entire array
+        D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+        srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srvDesc.Format = format;
+        srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
+        srvDesc.Texture2DArray.MipLevels = mipLevels;
+        srvDesc.Texture2DArray.FirstArraySlice = 0;
+        srvDesc.Texture2DArray.ArraySize = slices;
+
+        D3D12_CPU_DESCRIPTOR_HANDLE srvHandleCPU =
+            renderState.srvHeap->GetCPUDescriptorHandleForHeapStart();
+        srvHandleCPU.ptr += renderState.cbvSrvDescriptorSize * descriptorIndex;
+
+        renderState.device->CreateShaderResourceView(
+            texture,
+            &srvDesc,
+            srvHandleCPU);
+
+        return true;
+    }
+
+    bool uploadSliceFromDDS(const wchar_t *filename,
+                            UINT slice,
+                            bool mipmaps)
+    {
+        if (!texture || slice >= slices)
+            return false;
+
+        DirectX::ScratchImage image;
+        DirectX::TexMetadata metadata;
+
+        HRESULT hr = DirectX::LoadFromDDSFile(
+            filename,
+            DirectX::DDS_FLAGS_NONE,
+            &metadata,
+            image);
+
+        if (FAILED(hr))
+        {
+            errhr(L"LoadFromDDSFile failed", hr);
+            return false;
+        }
+
+        if (!mipmaps && metadata.mipLevels > 1)
+        {
+            err("Mipmaps in file but mipmaps=false specified. Remove the mipmaps from the file or use mipmaps");
+            return false;
+        }
+
+        if (metadata.width != width || metadata.height != height)
+        {
+            err("DDS file does not match array texture dimensions");
+            return false;
+        }
+
+        if (metadata.format != format)
+        {
+            err("DDS file does not match array texture format");
+            return false;
+        }
+
+        // Determine how many mips to upload
+        UINT srcMipLevels = mipmaps ? (UINT)metadata.mipLevels : 1;
+        if (srcMipLevels > mipLevels)
+            srcMipLevels = mipLevels;
+
+        const DirectX::Image *imgs = image.GetImages();
+
+        D3D12_SUBRESOURCE_DATA subresources[32]; // supports up to 32 mips
+        UINT subresourceCount = srcMipLevels;
+
+        for (UINT mip = 0; mip < srcMipLevels; ++mip)
+        {
+            const DirectX::Image &img = imgs[mip];
+            subresources[mip].pData = img.pixels;
+            subresources[mip].RowPitch = img.rowPitch;
+            subresources[mip].SlicePitch = img.slicePitch;
+        }
+
+        UINT firstSubresource =
+            D3D12CalcSubresource(0, slice, 0, mipLevels, slices);
+        UINT64 uploadBufferSize =
+            GetRequiredIntermediateSize(texture,
+                                        firstSubresource,
+                                        subresourceCount);
+
+        CD3DX12_HEAP_PROPERTIES heapPropsUpload(D3D12_HEAP_TYPE_UPLOAD);
+        auto uploadDesc = CD3DX12_RESOURCE_DESC::Buffer(uploadBufferSize);
+
+        ID3D12Resource *uploadHeap = nullptr;
+        hr = renderState.device->CreateCommittedResource(
+            &heapPropsUpload,
+            D3D12_HEAP_FLAG_NONE,
+            &uploadDesc,
+            D3D12_RESOURCE_STATE_GENERIC_READ,
+            nullptr,
+            IID_PPV_ARGS(&uploadHeap));
+
+        if (FAILED(hr))
+        {
+            errhr(L"CreateCommittedResource (upload buffer)", hr);
+            return false;
+        }
+
+        UpdateSubresources(
+            renderState.commandList,
+            texture,
+            uploadHeap,
+            0,
+            firstSubresource,
+            subresourceCount,
+            subresources);
+
+        return true;
+    }
+};
+
 struct d3d12_shader_pair_old_model
 {
     ID3DBlob *vertexShader = nullptr;
@@ -421,18 +595,18 @@ struct d3d12_shader_pair_old_model
 
 struct d3d12_shader_pair
 {
-    ID3DBlob* vertexShader = nullptr;
-    ID3DBlob* pixelShader  = nullptr;
+    ID3DBlob *vertexShader = nullptr;
+    ID3DBlob *pixelShader = nullptr;
 
-    bool compileShaderDXC(LPCWSTR filename, LPCWSTR entryPoint, LPCWSTR target, ID3DBlob** outBlob)
+    bool compileShaderDXC(LPCWSTR filename, LPCWSTR entryPoint, LPCWSTR target, ID3DBlob **outBlob)
     {
         if (!g_dxc.init())
         {
             err("DXC init failed");
             return false;
         }
-    
-        IDxcBlobEncoding* source = nullptr;
+
+        IDxcBlobEncoding *source = nullptr;
         HRESULT hr = g_dxc.utils->LoadFile(filename, nullptr, &source);
         if (FAILED(hr))
         {
@@ -441,11 +615,11 @@ struct d3d12_shader_pair
         }
 
         DxcBuffer srcBuffer{};
-        srcBuffer.Ptr      = source->GetBufferPointer();
-        srcBuffer.Size     = source->GetBufferSize();
+        srcBuffer.Ptr = source->GetBufferPointer();
+        srcBuffer.Size = source->GetBufferSize();
         srcBuffer.Encoding = DXC_CP_ACP;
-        
-        //TODO: take out std
+
+        // TODO: take out std
         std::vector<LPCWSTR> args;
         args.push_back(filename);
         args.push_back(L"-E");
@@ -453,22 +627,21 @@ struct d3d12_shader_pair
         args.push_back(L"-T");
         args.push_back(target);
 
-    #if defined(_DEBUG)
-        args.push_back(L"-Zi");           // debug info
+#if defined(_DEBUG)
+        args.push_back(L"-Zi"); // debug info
         args.push_back(L"-Qembed_debug");
-        args.push_back(L"-Od");           // no optimization
-    #else
+        args.push_back(L"-Od"); // no optimization
+#else
         args.push_back(L"-O3");
-    #endif
+#endif
 
-        IDxcResult* result = nullptr;
+        IDxcResult *result = nullptr;
         hr = g_dxc.compiler->Compile(
             &srcBuffer,
             args.data(),
             (UINT)args.size(),
             g_dxc.includeHandler,
-            IID_PPV_ARGS(&result)
-        );
+            IID_PPV_ARGS(&result));
 
         if (FAILED(hr) || result == nullptr)
         {
@@ -476,14 +649,15 @@ struct d3d12_shader_pair
             source->Release();
             return false;
         }
-        
-        IDxcBlobUtf8* errors = nullptr;
+
+        IDxcBlobUtf8 *errors = nullptr;
         result->GetOutput(DXC_OUT_ERRORS, IID_PPV_ARGS(&errors), nullptr);
         if (errors && errors->GetStringLength() > 0)
         {
             SDL_Log("%s", errors->GetStringPointer());
         }
-        if (errors) errors->Release();
+        if (errors)
+            errors->Release();
 
         HRESULT status = S_OK;
         result->GetStatus(&status);
@@ -495,7 +669,7 @@ struct d3d12_shader_pair
             return false;
         }
 
-        IDxcBlob* shaderBlob = nullptr;
+        IDxcBlob *shaderBlob = nullptr;
         hr = result->GetOutput(DXC_OUT_OBJECT, IID_PPV_ARGS(&shaderBlob), nullptr);
         result->Release();
         source->Release();
@@ -504,19 +678,19 @@ struct d3d12_shader_pair
         {
             errhr("DXC GetOutput(DXC_OUT_OBJECT) failed", hr);
             return false;
-        }        
-        *outBlob = reinterpret_cast<ID3DBlob*>(shaderBlob);
+        }
+        *outBlob = reinterpret_cast<ID3DBlob *>(shaderBlob);
         return true;
     }
 
     bool create(LPCWSTR filename)
-    {        
+    {
         if (!compileShaderDXC(filename, L"VSMain", L"vs_6_0", &vertexShader))
         {
             err("Failed to compile vertex shader with DXC");
             return false;
         }
-        
+
         if (!compileShaderDXC(filename, L"PSMain", L"ps_6_0", &pixelShader))
         {
             err("Failed to compile pixel shader with DXC");
@@ -526,7 +700,6 @@ struct d3d12_shader_pair
         return true;
     }
 };
-
 
 struct d3d12_pipeline_state
 {

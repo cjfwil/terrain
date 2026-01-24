@@ -275,7 +275,7 @@ int main(void)
         return 1;
     }
 
-    const int maxSRVDescriptors = 4;
+    const int maxSRVDescriptors = 2;
     D3D12_DESCRIPTOR_HEAP_DESC srvHeapDesc = {};
     srvHeapDesc.NumDescriptors = maxSRVDescriptors; // CBV + SRV
     srvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
@@ -413,9 +413,9 @@ int main(void)
     // sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_POINT; // TODO: make different filter for heightmaps versus albedo
     sampler.Filter = D3D12_FILTER_ANISOTROPIC;
     sampler.MaxAnisotropy = 16;
-    sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP; // these are only specifically for the world terrain (wrap only going sideways)
+    sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP; // these are only specifically for the world terrain (wrap only going sideways)
     sampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
-    sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+    sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
     sampler.MipLODBias = 0;
     sampler.ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER;
     sampler.BorderColor = D3D12_STATIC_BORDER_COLOR_TRANSPARENT_BLACK;
@@ -613,36 +613,71 @@ int main(void)
     //     return 1;
     // }
 
-    const uint32_t tileNum = 2; //MAX_TILES in the shader
+    // Number of tiles you want to load into the array
+    const uint32_t tileNum = 4;
+
+    // Filenames for each tile
     wchar_t *heightmapFilenames[tileNum] = {
+        L"data\\height\\chunk_1079_720_1094_735_height.dds",
+        L"data\\height\\chunk_1095_720_1110_735_height.dds",
         L"data\\height\\chunk_1079_736_1094_751_height.dds",
-        L"data\\height\\chunk_1095_720_1110_735_height.dds"};
+        L"data\\height\\chunk_1095_736_1110_751_height.dds",
+    };
+
     wchar_t *albedoFilenames[tileNum] = {
+        L"data\\albedo\\chunk_1079_720_1094_735_albedo.dds",
+        L"data\\albedo\\chunk_1095_720_1110_735_albedo.dds",
         L"data\\albedo\\chunk_1079_736_1094_751_albedo.dds",
-        L"data\\albedo\\chunk_1095_720_1110_735_albedo.dds"};
-    d3d12_texture heightmapTexture[tileNum];
-    d3d12_texture albedoTexture[tileNum];
+        L"data\\albedo\\chunk_1095_736_1110_751_albedo.dds",
+    };
 
-    UINT heightmapBase = 0;
-    UINT albedoBase = tileNum;
+    // Create the array textures
+    d3d12_texture_array heightArray;
+    d3d12_texture_array albedoArray;
 
-    for (int i = 0; i < tileNum; i++)
+    // Create empty array resources (one SRV each)
+    if (!heightArray.create(
+            4096,    // width
+            4096,    // height
+            tileNum, // slices
+            DXGI_FORMAT_BC4_UNORM,
+            1, // mipLevels (or more if you want)
+            0  // SRV index in heap
+            ))
     {
-        if (!heightmapTexture[i].create(heightmapFilenames[i], false, heightmapBase + i))
+        err("Failed to create height array");
+        return 1;
+    }
+
+    if (!albedoArray.create(
+            4096,
+            4096,
+            tileNum,
+            DXGI_FORMAT_BC1_UNORM,
+            13, // mipLevels TODO: automatically do this.
+            1  // SRV index in heap
+            ))
+    {
+        err("Failed to create albedo array");
+        return 1;
+    }
+
+    // Upload each tile into its slice
+    for (uint32_t i = 0; i < tileNum; i++)
+    {
+        if (!heightArray.uploadSliceFromDDS(heightmapFilenames[i], i, false))
         {
-            err("Create heightmap texture failed");
+            err("Failed to upload height slice");
             return 1;
         }
 
-        if (!albedoTexture[i].create(albedoFilenames[i], true, albedoBase+i))
+        if (!albedoArray.uploadSliceFromDDS(albedoFilenames[i], i, true))
         {
-            err("Create albedo texture failed");
+            err("Failed to upload albedo slice");
             return 1;
         }
     }
-
-    constantBufferData.heightmapBase = heightmapBase;
-    constantBufferData.albedoBase = albedoBase;
+    
     constantBufferData.tileCount = tileNum;
     // end of texture
 

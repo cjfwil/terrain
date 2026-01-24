@@ -31,7 +31,10 @@ if exist "gravel.dds" copy /Y "gravel.dds" "%OUTDIR%\"
 if exist "heightmap.png" copy /Y "heightmap.png" "%OUTDIR%\"
 if exist "greece_heightmap.dds" copy /Y "greece_heightmap.dds" "%OUTDIR%\"
 if exist "greece_albedo.dds" copy /Y "greece_albedo.dds" "%OUTDIR%\"
-if exist "data" copy /Y "data" "%OUTDIR%\"
+if exist "data\\height\\chunk_1079_736_1094_751_height.dds" copy /Y "data\\height\\chunk_1079_736_1094_751_height.dds" "%OUTDIR%\"
+if exist "data\\height\\chunk_1095_720_1110_735_height.dds" copy /Y "data\\height\\chunk_1095_720_1110_735_height.dds" "%OUTDIR%\"
+if exist "data\\albedo\\chunk_1079_736_1094_751_albedo.dds" copy /Y "data\\albedo\\chunk_1079_736_1094_751_albedo.dds" "%OUTDIR%\"
+if exist "data\\albedo\\chunk_1095_720_1110_735_albedo.dds" copy /Y "data\\albedo\\chunk_1095_720_1110_735_albedo.dds" "%OUTDIR%\"
 
 :: Copy SDL runtime DLLs from System32
 if exist "%WINDIR%\System32\SDL3.dll" copy /Y "%WINDIR%\System32\SDL3.dll" "%OUTDIR%\"
