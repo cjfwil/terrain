@@ -36,8 +36,8 @@ VSOut VSMain(uint2 position : POSITION)
 
     // Virtual heightmap dimensions for a 2x2 grid of 4096x4096 tiles
     float tileDim      = 4096.0f;
-    float tilesPerRow  = 2.0f;
-    float tilesPerCol  = 2.0f;
+    float tilesPerRow  = 3.0f;
+    float tilesPerCol  = 3.0f;
     float2 virtualDim  = float2(tileDim * tilesPerRow,
                                 tileDim * tilesPerCol);
 

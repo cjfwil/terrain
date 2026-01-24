@@ -614,28 +614,42 @@ int main(void)
     // }
 
     // Number of tiles you want to load into the array
-    const uint32_t tileNum = 4;
+    const uint32_t tileNum = 9;
 
     // Filenames for each tile
     wchar_t *heightmapFilenames[tileNum] = {
         L"data\\height\\chunk_1079_720_1094_735_height.dds",
         L"data\\height\\chunk_1095_720_1110_735_height.dds",
+        L"data\\height\\chunk_1111_720_1126_735_height.dds",
+
         L"data\\height\\chunk_1079_736_1094_751_height.dds",
         L"data\\height\\chunk_1095_736_1110_751_height.dds",
-    };
+        L"data\\height\\chunk_1111_736_1126_751_height.dds",
+
+        L"data\\height\\chunk_1079_752_1094_767_height.dds",
+        L"data\\height\\chunk_1095_752_1110_767_height.dds",
+        L"data\\height\\chunk_1111_752_1126_767_height.dds"};
 
     wchar_t *albedoFilenames[tileNum] = {
         L"data\\albedo\\chunk_1079_720_1094_735_albedo.dds",
         L"data\\albedo\\chunk_1095_720_1110_735_albedo.dds",
+        L"data\\albedo\\chunk_1111_720_1126_735_albedo.dds",
+        
         L"data\\albedo\\chunk_1079_736_1094_751_albedo.dds",
         L"data\\albedo\\chunk_1095_736_1110_751_albedo.dds",
+        L"data\\albedo\\chunk_1111_736_1126_751_albedo.dds",
+
+        L"data\\albedo\\chunk_1079_752_1094_767_albedo.dds",
+        L"data\\albedo\\chunk_1095_752_1110_767_albedo.dds",
+        L"data\\albedo\\chunk_1111_752_1126_767_albedo.dds"
     };
 
     // Create the array textures
     d3d12_texture_array heightArray;
     d3d12_texture_array albedoArray;
 
-    // Create empty array resources (one SRV each)
+    // TODO: TEST WITH UNCOMPRESSED FORMAT
+    //  Create empty array resources (one SRV each)
     if (!heightArray.create(
             4096,    // width
             4096,    // height
@@ -655,7 +669,7 @@ int main(void)
             tileNum,
             DXGI_FORMAT_BC1_UNORM,
             13, // mipLevels TODO: automatically do this.
-            1  // SRV index in heap
+            1   // SRV index in heap
             ))
     {
         err("Failed to create albedo array");
@@ -677,7 +691,7 @@ int main(void)
             return 1;
         }
     }
-    
+
     constantBufferData.tileCount = tileNum;
     // end of texture
 

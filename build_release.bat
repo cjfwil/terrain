@@ -27,19 +27,25 @@ if exist "shaders.hlsl" copy /Y "shaders.hlsl" "%OUTDIR%\"
 if exist "sky.hlsl" copy /Y "sky.hlsl" "%OUTDIR%\"
 if exist "ConstantBuffer.hlsl" copy /Y "ConstantBuffer.hlsl" "%OUTDIR%\"
 if exist "shaders_baked_heightmap.hlsl" copy /Y "shaders_baked_heightmap.hlsl" "%OUTDIR%\"
-if exist "gravel.dds" copy /Y "gravel.dds" "%OUTDIR%\"
-if exist "heightmap.png" copy /Y "heightmap.png" "%OUTDIR%\"
-if exist "greece_heightmap.dds" copy /Y "greece_heightmap.dds" "%OUTDIR%\"
-if exist "greece_albedo.dds" copy /Y "greece_albedo.dds" "%OUTDIR%\"
-if exist "data\\height\\chunk_1079_736_1094_751_height.dds" copy /Y "data\\height\\chunk_1079_736_1094_751_height.dds" "%OUTDIR%\"
-if exist "data\\height\\chunk_1095_720_1110_735_height.dds" copy /Y "data\\height\\chunk_1095_720_1110_735_height.dds" "%OUTDIR%\"
-if exist "data\\albedo\\chunk_1079_736_1094_751_albedo.dds" copy /Y "data\\albedo\\chunk_1079_736_1094_751_albedo.dds" "%OUTDIR%\"
-if exist "data\\albedo\\chunk_1095_720_1110_735_albedo.dds" copy /Y "data\\albedo\\chunk_1095_720_1110_735_albedo.dds" "%OUTDIR%\"
+@REM if exist "gravel.dds" copy /Y "gravel.dds" "%OUTDIR%\"
+@REM if exist "heightmap.png" copy /Y "heightmap.png" "%OUTDIR%\"
+@REM if exist "greece_heightmap.dds" copy /Y "greece_heightmap.dds" "%OUTDIR%\"
+@REM if exist "greece_albedo.dds" copy /Y "greece_albedo.dds" "%OUTDIR%\"
+:: Copy entire data folder recursively
+if exist "data" (
+    robocopy "data" "%OUTDIR%\data" /E /NFL /NDL /NJH /NJS /NP
+)
+
+
 
 :: Copy SDL runtime DLLs from System32
 if exist "%WINDIR%\System32\SDL3.dll" copy /Y "%WINDIR%\System32\SDL3.dll" "%OUTDIR%\"
 if exist "%WINDIR%\System32\SDL3_image.dll" copy /Y "%WINDIR%\System32\SDL3_image.dll" "%OUTDIR%\"
 if exist "%WINDIR%\System32\SDL3_ttf.dll" copy /Y "%WINDIR%\System32\SDL3_ttf.dll" "%OUTDIR%\"
+
+:: Copy DXC (DirectX Shader Compiler)
+:: if exist "%WINDIR%\System32\dxcompiler.dll" copy /Y "%WINDIR%\System32\dxcompiler.dll" "%OUTDIR%\"
+
 
 
 echo Build succeeded. Output: %OUTDIR%\%OUTNAME%
