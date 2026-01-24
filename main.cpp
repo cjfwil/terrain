@@ -4,6 +4,7 @@
 #pragma comment(lib, "d3d12.lib")
 #pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "d3dcompiler.lib")
+#pragma comment(lib, "dxcompiler.lib")
 #pragma comment(lib, "dxguid.lib")
 #pragma comment(lib, "imgui.lib")
 #if defined(_DEBUG)
@@ -274,8 +275,9 @@ int main(void)
         return 1;
     }
 
+    const int maxSRVDescriptors = 4;
     D3D12_DESCRIPTOR_HEAP_DESC srvHeapDesc = {};
-    srvHeapDesc.NumDescriptors = 1024; // CBV + SRV
+    srvHeapDesc.NumDescriptors = maxSRVDescriptors; // CBV + SRV
     srvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     srvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
     hr = renderState.device->CreateDescriptorHeap(&srvHeapDesc, IID_PPV_ARGS(&renderState.srvHeap));
@@ -400,7 +402,7 @@ int main(void)
 
     CD3DX12_DESCRIPTOR_RANGE1 ranges[2];
     ranges[0].Init(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, 1, 0);
-    ranges[1].Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 3, 0, 0, D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC);
+    ranges[1].Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, maxSRVDescriptors, 0, 0, D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC);
     CD3DX12_ROOT_PARAMETER1 rootParameters[2];
     // rootParameters[0].InitAsDescriptorTable(1, &ranges[0], D3D12_SHADER_VISIBILITY_VERTEX); // crv
     rootParameters[0].InitAsConstantBufferView(0);

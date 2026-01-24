@@ -6,6 +6,7 @@
 #include <dxgi1_2.h>
 #include <d3dcompiler.h>
 #include <DirectXMath.h>
+#include <dxcapi.h>
 
 #include <imgui.h>
 #include <backends/imgui_impl_sdl3.h>
@@ -17,6 +18,30 @@
 #pragma warning(pop)
 
 #include "error.h"
+
+struct dxc_context
+{
+    IDxcUtils*        utils   = nullptr;
+    IDxcCompiler3*    compiler = nullptr;
+    IDxcIncludeHandler* includeHandler = nullptr;
+
+    bool init()
+    {
+        if (utils) return true; // already inited
+
+        HRESULT hr = DxcCreateInstance(CLSID_DxcUtils, IID_PPV_ARGS(&utils));
+        if (FAILED(hr)) return false;
+
+        hr = DxcCreateInstance(CLSID_DxcCompiler, IID_PPV_ARGS(&compiler));
+        if (FAILED(hr)) return false;
+
+        hr = utils->CreateDefaultIncludeHandler(&includeHandler);
+        if (FAILED(hr)) return false;
+
+        return true;
+    }
+};
+static dxc_context g_dxc;
 
 static struct
 {
@@ -358,7 +383,7 @@ struct d3d12_texture
     }
 };
 
-struct d3d12_shader_pair
+struct d3d12_shader_pair_old_model
 {
     ID3DBlob *vertexShader = nullptr;
     ID3DBlob *pixelShader = nullptr;
@@ -393,6 +418,115 @@ struct d3d12_shader_pair
         return true;
     }
 };
+
+struct d3d12_shader_pair
+{
+    ID3DBlob* vertexShader = nullptr;
+    ID3DBlob* pixelShader  = nullptr;
+
+    bool compileShaderDXC(LPCWSTR filename, LPCWSTR entryPoint, LPCWSTR target, ID3DBlob** outBlob)
+    {
+        if (!g_dxc.init())
+        {
+            err("DXC init failed");
+            return false;
+        }
+    
+        IDxcBlobEncoding* source = nullptr;
+        HRESULT hr = g_dxc.utils->LoadFile(filename, nullptr, &source);
+        if (FAILED(hr))
+        {
+            errhr("DXC LoadFile failed", hr);
+            return false;
+        }
+
+        DxcBuffer srcBuffer{};
+        srcBuffer.Ptr      = source->GetBufferPointer();
+        srcBuffer.Size     = source->GetBufferSize();
+        srcBuffer.Encoding = DXC_CP_ACP;
+        
+        //TODO: take out std
+        std::vector<LPCWSTR> args;
+        args.push_back(filename);
+        args.push_back(L"-E");
+        args.push_back(entryPoint);
+        args.push_back(L"-T");
+        args.push_back(target);
+
+    #if defined(_DEBUG)
+        args.push_back(L"-Zi");           // debug info
+        args.push_back(L"-Qembed_debug");
+        args.push_back(L"-Od");           // no optimization
+    #else
+        args.push_back(L"-O3");
+    #endif
+
+        IDxcResult* result = nullptr;
+        hr = g_dxc.compiler->Compile(
+            &srcBuffer,
+            args.data(),
+            (UINT)args.size(),
+            g_dxc.includeHandler,
+            IID_PPV_ARGS(&result)
+        );
+
+        if (FAILED(hr) || result == nullptr)
+        {
+            errhr("DXC Compile failed", hr);
+            source->Release();
+            return false;
+        }
+        
+        IDxcBlobUtf8* errors = nullptr;
+        result->GetOutput(DXC_OUT_ERRORS, IID_PPV_ARGS(&errors), nullptr);
+        if (errors && errors->GetStringLength() > 0)
+        {
+            SDL_Log("%s", errors->GetStringPointer());
+        }
+        if (errors) errors->Release();
+
+        HRESULT status = S_OK;
+        result->GetStatus(&status);
+        if (FAILED(status))
+        {
+            errhr("DXC compilation failed (status)", status);
+            result->Release();
+            source->Release();
+            return false;
+        }
+
+        IDxcBlob* shaderBlob = nullptr;
+        hr = result->GetOutput(DXC_OUT_OBJECT, IID_PPV_ARGS(&shaderBlob), nullptr);
+        result->Release();
+        source->Release();
+
+        if (FAILED(hr) || shaderBlob == nullptr)
+        {
+            errhr("DXC GetOutput(DXC_OUT_OBJECT) failed", hr);
+            return false;
+        }        
+        *outBlob = reinterpret_cast<ID3DBlob*>(shaderBlob);
+        return true;
+    }
+
+    bool create(LPCWSTR filename)
+    {        
+        if (!compileShaderDXC(filename, L"VSMain", L"vs_6_0", &vertexShader))
+        {
+            err("Failed to compile vertex shader with DXC");
+            return false;
+        }
+        
+        if (!compileShaderDXC(filename, L"PSMain", L"ps_6_0", &pixelShader))
+        {
+            err("Failed to compile pixel shader with DXC");
+            return false;
+        }
+
+        return true;
+    }
+};
+
 
 struct d3d12_pipeline_state
 {

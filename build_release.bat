@@ -24,11 +24,14 @@ if errorlevel 1 (
 
 :: Copy runtime assets
 if exist "shaders.hlsl" copy /Y "shaders.hlsl" "%OUTDIR%\"
+if exist "sky.hlsl" copy /Y "sky.hlsl" "%OUTDIR%\"
+if exist "ConstantBuffer.hlsl" copy /Y "ConstantBuffer.hlsl" "%OUTDIR%\"
 if exist "shaders_baked_heightmap.hlsl" copy /Y "shaders_baked_heightmap.hlsl" "%OUTDIR%\"
 if exist "gravel.dds" copy /Y "gravel.dds" "%OUTDIR%\"
 if exist "heightmap.png" copy /Y "heightmap.png" "%OUTDIR%\"
 if exist "greece_heightmap.dds" copy /Y "greece_heightmap.dds" "%OUTDIR%\"
 if exist "greece_albedo.dds" copy /Y "greece_albedo.dds" "%OUTDIR%\"
+if exist "data" copy /Y "data" "%OUTDIR%\"
 
 :: Copy SDL runtime DLLs from System32
 if exist "%WINDIR%\System32\SDL3.dll" copy /Y "%WINDIR%\System32\SDL3.dll" "%OUTDIR%\"
