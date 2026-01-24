@@ -275,7 +275,7 @@ int main(void)
     }
 
     D3D12_DESCRIPTOR_HEAP_DESC srvHeapDesc = {};
-    srvHeapDesc.NumDescriptors = 2; // CBV + SRV
+    srvHeapDesc.NumDescriptors = 1024; // CBV + SRV
     srvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     srvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
     hr = renderState.device->CreateDescriptorHeap(&srvHeapDesc, IID_PPV_ARGS(&renderState.srvHeap));
@@ -400,7 +400,7 @@ int main(void)
 
     CD3DX12_DESCRIPTOR_RANGE1 ranges[2];
     ranges[0].Init(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, 1, 0);
-    ranges[1].Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 2, 0, 0, D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC);
+    ranges[1].Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 3, 0, 0, D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC);
     CD3DX12_ROOT_PARAMETER1 rootParameters[2];
     // rootParameters[0].InitAsDescriptorTable(1, &ranges[0], D3D12_SHADER_VISIBILITY_VERTEX); // crv
     rootParameters[0].InitAsConstantBufferView(0);
@@ -611,19 +611,37 @@ int main(void)
     //     return 1;
     // }
 
-    d3d12_texture heightmapTexture;
-    if (!heightmapTexture.create(L"greece_heightmap.dds", false, 0))
+    const uint32_t tileNum = 2; //MAX_TILES in the shader
+    wchar_t *heightmapFilenames[tileNum] = {
+        L"data\\height\\chunk_1079_736_1094_751_height.dds",
+        L"data\\height\\chunk_1095_720_1110_735_height.dds"};
+    wchar_t *albedoFilenames[tileNum] = {
+        L"data\\albedo\\chunk_1079_736_1094_751_albedo.dds",
+        L"data\\albedo\\chunk_1095_720_1110_735_albedo.dds"};
+    d3d12_texture heightmapTexture[tileNum];
+    d3d12_texture albedoTexture[tileNum];
+
+    UINT heightmapBase = 0;
+    UINT albedoBase = tileNum;
+
+    for (int i = 0; i < tileNum; i++)
     {
-        err("Create texture failed");
-        return 1;
+        if (!heightmapTexture[i].create(heightmapFilenames[i], false, heightmapBase + i))
+        {
+            err("Create heightmap texture failed");
+            return 1;
+        }
+
+        if (!albedoTexture[i].create(albedoFilenames[i], true, albedoBase+i))
+        {
+            err("Create albedo texture failed");
+            return 1;
+        }
     }
 
-    d3d12_texture albedoTexture;
-    if (!albedoTexture.create(L"greece_albedo.dds", true, 1))
-    {
-        err("Create texture failed");
-        return 1;
-    }
+    constantBufferData.heightmapBase = heightmapBase;
+    constantBufferData.albedoBase = albedoBase;
+    constantBufferData.tileCount = tileNum;
     // end of texture
 
     renderState.commandList->Close();
@@ -836,8 +854,9 @@ int main(void)
 
             ImGui::SliderInt("Clipmaps", &activeClipmapRings, 1, maxClipmapRings);
 
-            // basic profiling
             ImGui::SliderFloat("Debug Speed Boost", &debugBoostSpeed, 1.0f, 1000.0f, "%.3f", ImGuiSliderFlags_Logarithmic);
+            ImGui::SliderFloat("Debug Scaler", &constantBufferData.debug_scaler, 0.25f, 4.0f, "%.3f", ImGuiSliderFlags_Logarithmic);
+            // basic profiling
 
             uint64_t frameHistoryIndex = programState.ticksElapsed % 256;
             profiling.frameRateHistory[frameHistoryIndex] = ImGui::GetIO().Framerate;
@@ -1073,8 +1092,8 @@ int main(void)
         // NOTE: start at 1 for clipmap rings only
 
         v3 cmFwd2D = cameraForward;
-        cmFwd2D.y = 0; // for ground level
-        cmFwd2D = v3::normalised(cmFwd2D);
+        cmFwd2D.y = 0;                     // for ground level
+        cmFwd2D = v3::normalised(cmFwd2D); // TODO: note debug scaler here
 
         v3 clipmapCentreLocation = cameraPos + cmFwd2D * (terrainGridDimensionInWorldUnits / 2);
 
@@ -1170,7 +1189,7 @@ int main(void)
 
         programState.timeElapsed += deltaTime;
         programState.ticksElapsed++;
-        
+
         constantBufferData.timeElapsed = programState.timeElapsed;
 
         QueryPerformanceCounter(&profiling.t3);

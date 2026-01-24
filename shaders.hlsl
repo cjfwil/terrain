@@ -1,16 +1,4 @@
-cbuffer SceneConstantBuffer : register(b0)
-{
-    float4x4 world;
-    float4x4 view;
-    float4x4 projection;
-    float4 cameraPos;
-    float2 ringOffset;
-    double timeElapsed;
-    float ringWorldSize;
-    float ringSampleStep;    
-    float planetScaleRatio;   
-    int terrainGridDimensionInVertices;
-};
+#include "ConstantBuffer.hlsl"
 
 struct VSOut
 {
@@ -22,10 +10,16 @@ struct VSOut
 };
 
 Texture2D g_texture : register(t0);
-Texture2D g_albedo : register(t1);
+Texture2D g_albedo : register(t2);
 SamplerState g_sampler : register(s0);
 
-// VSOut VSMain(float3 position : POSITION, float2 uv : TEXCOORD, float3 norm : NORMAL)
+float hash21(float2 p)
+{
+    p = frac(p * float2(123.34, 456.21));
+    p += dot(p, p + 45.32);
+    return frac(p.x * p.y);
+}
+
 VSOut VSMain(uint2 position : POSITION)
 {    
     // int lodLevel = currentLodLevel*sampleLodLevelWithMipmaps;
@@ -38,41 +32,22 @@ VSOut VSMain(uint2 position : POSITION)
     wp.xz *= ringSampleStep;
     
     wp = mul(world, wp);
-    
-    float heightmapDim = 8192.0f*2; 
-    float2 pUv = wp.xz + 0.5f + ringOffset;
+
+    // float heightmapDim = 8192.0f*2;
+    float heightmapDim = 8192.0f / 2;
+    float2 pUv = wp.xz + 0.5f + (ringOffset);
     float2 terrainHeightmapUV = float2(1.0 - pUv.x, pUv.y) / heightmapDim;
     float heightPointData = g_texture.SampleLevel(g_sampler, terrainHeightmapUV, lodLevel).r;    
-    float artistScale = (5000.0f*0.015f);  //controlled by human hand, dependent on heightmap
+    float artistScale = (5000.0f*0.015f)*debug_scaler;  //controlled by human hand, dependent on heightmap
     wp.y = heightPointData*artistScale;
 
-    // // --- morph factor near inner edge ---
-    // float2 local  = position.xz;
-    // float2 center = float2(gridDimSize * 0.5f, gridDimSize * 0.5f);
-    // float2 d      = abs(local - center);
-    // float dist    = max(d.x, d.y);
+    // --- Procedural micro-height detail ---
+    // float detailFreq = 0.12; // how dense the bumps are
+    // float detailAmp = 0.8 * debug_scaler; // height in world units    
+    // float micro = hash21(wp.xz * detailFreq);
+    // micro = micro * 2.0 - 1.0; // remap 0..1 → -1..1
+    // wp.y += micro * detailAmp;
 
-    // float innerStart = (gridDimSize * 0.5f) - 4.0f;
-    // float innerEnd   = (gridDimSize * 0.5f);
-    // float morph = saturate((dist - innerStart) / (innerEnd - innerStart));
-    // morph *= step(1.5f, ringSampleStep); // only outer rings
-
-    // // --- parent LOD sample ---
-    // float parentStep = ringSampleStep * 2.0f;
-    // float2 worldXZ   = wp.xz + ringOffset;
-    // float2 parentXZ  = floor(worldXZ / parentStep) * parentStep;
-
-    // float2 parentPUv = parentXZ + 0.5f;
-    // float2 parentUV  = float2(1.0 - parentPUv.x, parentPUv.y) / heightmapDim;
-
-    // float parentHeightData = g_texture.SampleLevel(g_sampler, parentUV, lodLevel).r;
-    // float lowHeight = parentHeightData * artistScale;
-
-    // // final height
-    // float finalHeight = lerp(highHeight, lowHeight, morph);
-    // wp.y = finalHeight;
-
-    
     float3 worldPos = wp.xyz;
     worldPos.x += ringOffset.x;
     worldPos.z += ringOffset.y;
@@ -93,26 +68,19 @@ VSOut VSMain(uint2 position : POSITION)
 
     float3 n = normalize(cross(dz, dx));
 
+    // --- Procedural micro-normal ---
+    // float nFreq = 0.25;
+    // float nAmp = 0.25;
+    // float nx = hash21(worldPos.xz * nFreq + 10.0);
+    // float nz = hash21(worldPos.xz * nFreq + 20.0);
+    // float3 nDetail = normalize(float3(nx - 0.5, 1.0, nz - 0.5));
+    // n = normalize(lerp(n, nDetail, nAmp));
+
     float seaTex = 0.2f / 100.0f;   // your actual water level in texture space
     float seaLevel = seaTex * artistScale;
 
     o.water.x = step(wp.y, seaLevel);
     o.water.y = heightPointData;
-
-
-
-    // lower centre of the grid so they dont overlay (major greedy DONT KEEP THIS !!!!!!!)
-    // TODO: use actual ring meshes like a normal person
-    // float2 local  = position.xz;
-    // float2 center = float2(gridDimSize, gridDimSize) * 0.5f;    
-    // float2 d = abs(local - center);
-    // float dist = max(d.x, d.y);    
-    // float innerHalf = (gridDimSize-1) * 0.25f; // central 32x32 region    
-    // float inside = step(dist, innerHalf);    
-    // float isOuter = step(1.5f, ringSampleStep); // 1 if ringSampleStep >= 2
-    // float maxDrop = 50.0f;
-    // worldPos.y -= maxDrop * inside * isOuter;
-
 
     // camera-relative curvature (visual only)
     const float planetRadius = 600000.0f * planetScaleRatio;
@@ -140,7 +108,6 @@ VSOut VSMain(uint2 position : POSITION)
     return o;
 }
 
-
 float4 PSMain(VSOut IN) : SV_Target
 {
     const float3 lightDir = normalize(float3(0.5f, -1.0f, 0.2f));
@@ -153,6 +120,12 @@ float4 PSMain(VSOut IN) : SV_Target
     float wetness = clamp(IN.water.y*5, 0.25f, 1.0f);
     float blendStrength = 0.6f; // how strong the albedo layer is
     float3 landColor = lerp(float3(0.8f, 0.75f, 0.5f), sampleData.rgb, blendStrength);
+    // --- Procedural albedo breakup ---
+    // float cFreq = 0.35;
+    // float cAmp = 0.15;
+
+    // float noise = hash21(IN.worldPos.xz * cFreq);
+    // landColor = lerp(landColor, landColor * (1.0 + cAmp), noise);
 
     float3 waterColor = lerp(float3(0.0f, 0.3f, 0.8f), landColor, 0.5f);
     
@@ -167,39 +140,3 @@ float4 PSMain(VSOut IN) : SV_Target
 
     return float4(lit * albedo.rgb, albedo.a);
 }
-
-// float4 PSMain(VSOut IN) : SV_Target
-// {    
-//     float3 N = normalize(IN.normalWS);
-
-//     // Map from [-1,1] to [0,1]
-//     float3 colour = N * 0.5f + 0.5f;
-//     // float3 colour = float3(1.0f, 1.0f, 1.0f);
-
-//     return float4(colour, 1.0f);
-// }
-
-// float4 PSMain(VSOut IN) : SV_Target
-// {
-//     float h = saturate(IN.height);
-
-//     // Colour ramp: low = blue, mid = green, high = white
-//     float3 low  = float3(0.0, 0.2, 0.0);
-//     float3 mid  = float3(0.1, 0.6, 0.1);
-//     float3 high = float3(1.0, 1.0, 1.0);
-
-//     float3 colour;
-
-//     if (h < 0.5)
-//     {
-//         float t = h / 0.5;
-//         colour = lerp(low, mid, t);
-//     }
-//     else
-//     {
-//         float t = (h - 0.5) / 0.5;
-//         colour = lerp(mid, high, t);
-//     }
-
-//     return float4(colour, 1.0f);
-// }

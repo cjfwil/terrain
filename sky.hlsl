@@ -1,18 +1,6 @@
 //TODO Do own constant buffer for sky only
 
-cbuffer SceneConstantBuffer : register(b0)
-{
-    float4x4 world;
-    float4x4 view;
-    float4x4 projection;
-    float4 cameraPos;
-    float2 ringOffset;
-    double timeElapsed;
-    float ringWorldSize;
-    float ringSampleStep;    
-    float planetScaleRatio;   
-    int terrainGridDimensionInVertices;
-};
+#include "ConstantBuffer.hlsl"
 
 struct VSOut {
     float4 pos : SV_Position;
@@ -48,7 +36,8 @@ VSOut VSMain(uint vertexID : SV_VertexID)
 
 float4 PSMain(VSOut i) : SV_Target
 {
-    float t = (float)timeElapsed * 0.05;
+    // float t = (float)timeElapsed * 0.05;
+    float t = 0;
 
     // ---------------------------------------------------------
     // 1. Extract camera basis vectors from the view matrix

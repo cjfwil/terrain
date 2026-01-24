@@ -22,7 +22,7 @@ static struct
 {
     DirectX::XMFLOAT4X4 world;
     DirectX::XMFLOAT4X4 view; // 4 x 4 matrix has 16 entries. 4 bytes per entry -> 64 bytes total
-    DirectX::XMFLOAT4X4 projection;    
+    DirectX::XMFLOAT4X4 projection;
     DirectX::XMVECTOR cameraPos;
     DirectX::XMFLOAT2 ringOffset;
     double timeElapsed;
@@ -30,6 +30,12 @@ static struct
     float ringSampleStep;
     float planetScaleRatio = 1.0f / 75.0f;
     int terrainGridDimensionInVertices;
+    float debug_scaler = 1.0f;
+
+    int heightmapBase;
+    int albedoBase;
+    int tileCount;
+
 } constantBufferData;
 
 struct vertex
@@ -367,7 +373,7 @@ struct d3d12_shader_pair
 #endif
 
         ID3DBlob *vsError = nullptr;
-        HRESULT hr = D3DCompileFromFile(filename, nullptr, nullptr, "VSMain", "vs_5_0", compileFlags, 0, &vertexShader, &vsError);
+        HRESULT hr = D3DCompileFromFile(filename, nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE, "VSMain", "vs_5_0", compileFlags, 0, &vertexShader, &vsError);
         if (FAILED(hr))
         {
             errhr("D3DCompile from file failed (vertex shader)", hr);
@@ -378,7 +384,7 @@ struct d3d12_shader_pair
             }
             return false;
         }
-        hr = D3DCompileFromFile(filename, nullptr, nullptr, "PSMain", "ps_5_0", compileFlags, 0, &pixelShader, nullptr);
+        hr = D3DCompileFromFile(filename, nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE, "PSMain", "ps_5_0", compileFlags, 0, &pixelShader, nullptr);
         if (FAILED(hr))
         {
             errhr("D3DCompile from file failed (pixel shader)", hr);
@@ -397,12 +403,12 @@ struct d3d12_pipeline_state
         D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
         psoDesc.InputLayout = inputLayout;
         psoDesc.pRootSignature = renderState.rootSignature;
-        psoDesc.VS = CD3DX12_SHADER_BYTECODE(shaderPair->vertexShader);        
+        psoDesc.VS = CD3DX12_SHADER_BYTECODE(shaderPair->vertexShader);
         psoDesc.PS = CD3DX12_SHADER_BYTECODE(shaderPair->pixelShader);
         psoDesc.RasterizerState = rasterizerDesc;
         psoDesc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
         psoDesc.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
-        psoDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS;            
+        psoDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS;
         // psoDesc.DepthStencilState.StencilEnable = FALSE; // TODO: what does this do
         if (depthEnable)
         {
@@ -412,7 +418,7 @@ struct d3d12_pipeline_state
         else
         {
             psoDesc.DepthStencilState.DepthEnable = FALSE;
-            psoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;            
+            psoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
         }
         psoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
         psoDesc.SampleMask = UINT_MAX;
