@@ -4,7 +4,7 @@ import shutil
 HEIGHT_SRC = r"C:\Work\Projects\terrain_download_python\run_20260122_051401\dds_height"
 ALBEDO_SRC = r"C:\Work\Projects\terrain_download_python\run_20260122_051401\dds_albedo"
 
-DEST_ROOT = r"C:\Work\Projects\terrain"   # <-- change this
+DEST_ROOT = r"C:\Work\Projects\terrain"   # <-- TODO change this to automatically get current root
 heightmapFilenames = [
     r"data\height\chunk_1079_720_1094_735_height.dds",
     r"data\height\chunk_1095_720_1110_735_height.dds",

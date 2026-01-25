@@ -45,7 +45,6 @@ struct dxc_context
         return true;
     }
 };
-static dxc_context g_dxc;
 
 static struct
 {
@@ -133,6 +132,8 @@ struct ImGuiDescriptorHeapAllocator
 
 static struct
 {
+    dxc_context dxc;
+
     ID3D12DescriptorHeap *imguiSrvHeap = nullptr;
     ImGuiDescriptorHeapAllocator imguiSrvAllocator;
     // init
@@ -299,6 +300,7 @@ struct d3d12_texture_2d
         }
 
         // Prepare subresources
+        // TODO: remove std
         std::vector<D3D12_SUBRESOURCE_DATA> subresources;
 
         const DirectX::Image *imgs = image.GetImages();
@@ -600,14 +602,14 @@ struct d3d12_shader_pair
 
     bool compileShaderDXC(LPCWSTR filename, LPCWSTR entryPoint, LPCWSTR target, ID3DBlob **outBlob)
     {
-        if (!g_dxc.init())
+        if (!renderState.dxc.init())
         {
             err("DXC init failed");
             return false;
         }
 
         IDxcBlobEncoding *source = nullptr;
-        HRESULT hr = g_dxc.utils->LoadFile(filename, nullptr, &source);
+        HRESULT hr = renderState.dxc.utils->LoadFile(filename, nullptr, &source);
         if (FAILED(hr))
         {
             errhr("DXC LoadFile failed", hr);
@@ -636,11 +638,11 @@ struct d3d12_shader_pair
 #endif
 
         IDxcResult *result = nullptr;
-        hr = g_dxc.compiler->Compile(
+        hr = renderState.dxc.compiler->Compile(
             &srcBuffer,
             args.data(),
             (UINT)args.size(),
-            g_dxc.includeHandler,
+            renderState.dxc.includeHandler,
             IID_PPV_ARGS(&result));
 
         if (FAILED(hr) || result == nullptr)

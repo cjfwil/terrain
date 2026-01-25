@@ -2,15 +2,15 @@
 
 struct VSOut
 {
-    float4 position   : SV_POSITION;
-    float3 worldPos   : TEXCOORD0;
-    float2 uvLocal    : TEXCOORD1;
-    float3 normalWS   : TEXCOORD2;
-    float2 water      : TEXCOORD3;
-    int   sliceIndex  : TEXCOORD4;
+    float4 position : SV_POSITION;
+    float3 worldPos : TEXCOORD0;
+    float2 uvLocal : TEXCOORD1;
+    float3 normalWS : TEXCOORD2;
+    float2 water : TEXCOORD3;
+    int sliceIndex : TEXCOORD4;
 };
 
-Texture2DArray<float>  g_heightArray : register(t0);
+Texture2DArray<float> g_heightArray : register(t0);
 Texture2DArray<float4> g_albedoArray : register(t1);
 
 SamplerState g_sampler : register(s0);
@@ -22,7 +22,7 @@ float hash21(float2 p)
     return frac(p.x * p.y);
 }
 
-VSOut VSMain(uint2 position : POSITION)
+VSOut VSMain(uint2 position: POSITION)
 {
     int lodLevel = 0;
     VSOut o;
@@ -34,12 +34,10 @@ VSOut VSMain(uint2 position : POSITION)
 
     wp = mul(world, wp);
 
-    // Virtual heightmap dimensions for a 2x2 grid of 4096x4096 tiles
-    float tileDim      = 4096.0f;
-    float tilesPerRow  = 3.0f;
-    float tilesPerCol  = 3.0f;
-    float2 virtualDim  = float2(tileDim * tilesPerRow,
-                                tileDim * tilesPerCol);
+    float tileDim = 4096.0f;
+    float tilesPerRow = 3.0f;
+    float tilesPerCol = 3.0f;
+    float2 virtualDim = float2(tileDim * tilesPerRow, tileDim * tilesPerCol);
 
     float2 pUv = wp.xz + 0.5f + ringOffset;
     float2 uvGlobal = float2(1.0 - pUv.x, pUv.y) / virtualDim;
@@ -62,13 +60,9 @@ VSOut VSMain(uint2 position : POSITION)
     uvLocal.y = frac(tilePos.y);
 
     // Sample height from array
-    float heightPointData =
-        g_heightArray.SampleLevel(
-            g_sampler,
-            float3(uvLocal, sliceIndex),
-            lodLevel).r;
+    float heightPointData = g_heightArray.SampleLevel(g_sampler, float3(uvLocal, sliceIndex), lodLevel).r;
 
-    float artistScale = (5000.0f * 0.015f) * debug_scaler;
+    float artistScale = (5000.0f * 0.03f) * debug_scaler;
     wp.y = heightPointData * artistScale;
 
     float3 worldPos = wp.xyz;
@@ -76,43 +70,28 @@ VSOut VSMain(uint2 position : POSITION)
     worldPos.z += ringOffset.y;
 
     float texelWorld = ringSampleStep;
-    float texelUV    = texelWorld / tileDim; // per-tile texel size in UV
+    float texelUV = texelWorld / tileDim; // per-tile texel size in UV
 
-    float hL = g_heightArray.SampleLevel(
-                   g_sampler,
-                   float3(uvLocal + float2(-texelUV, 0), sliceIndex),
-                   lodLevel).r * artistScale;
-
-    float hR = g_heightArray.SampleLevel(
-                   g_sampler,
-                   float3(uvLocal + float2(texelUV, 0), sliceIndex),
-                   lodLevel).r * artistScale;
-
-    float hD = g_heightArray.SampleLevel(
-                   g_sampler,
-                   float3(uvLocal + float2(0, -texelUV), sliceIndex),
-                   lodLevel).r * artistScale;
-
-    float hU = g_heightArray.SampleLevel(
-                   g_sampler,
-                   float3(uvLocal + float2(0, texelUV), sliceIndex),
-                   lodLevel).r * artistScale;
+    float hL = g_heightArray.SampleLevel(g_sampler, float3(uvLocal + float2(-texelUV, 0), sliceIndex), lodLevel).r * artistScale;
+    float hR = g_heightArray.SampleLevel(g_sampler, float3(uvLocal + float2(texelUV, 0), sliceIndex), lodLevel).r * artistScale;
+    float hD = g_heightArray.SampleLevel(g_sampler, float3(uvLocal + float2(0, -texelUV), sliceIndex), lodLevel).r * artistScale;
+    float hU = g_heightArray.SampleLevel(g_sampler, float3(uvLocal + float2(0, texelUV), sliceIndex), lodLevel).r * artistScale;
 
     float worldDelta = texelWorld * 2.0f;
     float3 dx = float3(worldDelta, hR - hL, 0.0f);
-    float3 dz = float3(0.0f,      hU - hD, worldDelta);
-    float3 n  = normalize(cross(dz, dx));
+    float3 dz = float3(0.0f, hU - hD, worldDelta);
+    float3 n = normalize(cross(dz, dx));
 
-    float seaTex   = 0.2f / 100.0f;
+    float seaTex = 0.2f / 100.0f;
     float seaLevel = seaTex * artistScale;
 
     o.water.x = step(wp.y, seaLevel);
     o.water.y = heightPointData;
 
-    const float planetRadius      = 600000.0f * planetScaleRatio;
+    const float planetRadius = 600000.0f * planetScaleRatio;
     const float curvatureStrength = 1.0f;
 
-    float3 rel  = worldPos - cameraPos.xyz;
+    float3 rel = worldPos - cameraPos.xyz;
     float dist2 = dot(rel.xz, rel.xz);
     float curvatureOffset = -(dist2 / (2.0f * planetRadius)) * curvatureStrength;
 
@@ -124,8 +103,8 @@ VSOut VSMain(uint2 position : POSITION)
     float4 viewPos = mul(view, wp);
     o.position = mul(projection, viewPos);
 
-    o.worldPos   = worldPos;
-    o.uvLocal    = uvLocal;
+    o.worldPos = worldPos;
+    o.uvLocal = uvLocal;
     o.sliceIndex = sliceIndex;
 
     return o;
@@ -133,26 +112,26 @@ VSOut VSMain(uint2 position : POSITION)
 
 float4 PSMain(VSOut IN) : SV_Target
 {
-    const float3 lightDir   = normalize(float3(0.5f, -1.0f, 0.2f));
+    const float3 lightDir = normalize(float3(0.5f, -1.0f, 0.2f));
     const float3 lightColor = float3(1.0f, 0.98f, 0.9f);
-    const float  ambient    = 0.2f;
+    const float ambient = 0.2f;
 
     int sliceIndex = IN.sliceIndex;
 
     float4 sampleData =
         g_albedoArray.Sample(g_sampler, float3(IN.uvLocal, sliceIndex));
 
-    float wetness       = clamp(IN.water.y * 5, 0.25f, 1.0f);
+    float wetness = clamp(IN.water.y, 0.0f, 1.0f);
     float blendStrength = 0.6f;
     float3 landColor = lerp(float3(0.8f, 0.75f, 0.5f), sampleData.rgb, blendStrength);
-    float3 waterColor = lerp(float3(0.0f, 0.3f, 0.8f), landColor, 0.5f);
+    // float3 waterColor = lerp(float3(0.0f, 0.3f, 0.8f), landColor, 0.5f);
 
-    float3 base   = lerp(landColor, waterColor, IN.water.x);
+    float3 base = landColor;
     float4 albedo = float4(base, 1.0f);
 
-    float3 N   = normalize(IN.normalWS);
-    float  diff = saturate(dot(N, -lightDir));
-    float3 lit  = (ambient + diff * 0.8f) * lightColor;
+    float3 N = normalize(IN.normalWS);
+    float diff = saturate(dot(N, -lightDir));
+    float3 lit = (ambient + diff * 0.8f) * lightColor;
 
     return float4(lit * albedo.rgb, albedo.a);
 }

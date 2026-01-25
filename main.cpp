@@ -413,9 +413,9 @@ int main(void)
     // sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_POINT; // TODO: make different filter for heightmaps versus albedo
     sampler.Filter = D3D12_FILTER_ANISOTROPIC;
     sampler.MaxAnisotropy = 16;
-    sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP; // these are only specifically for the world terrain (wrap only going sideways)
-    sampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
-    sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_MIRROR; // these are only specifically for the world terrain (wrap only going sideways)
+    sampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_MIRROR;
+    sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_MIRROR;
     sampler.MipLODBias = 0;
     sampler.ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER;
     sampler.BorderColor = D3D12_STATIC_BORDER_COLOR_TRANSPARENT_BLACK;
@@ -634,15 +634,14 @@ int main(void)
         L"data\\albedo\\chunk_1079_720_1094_735_albedo.dds",
         L"data\\albedo\\chunk_1095_720_1110_735_albedo.dds",
         L"data\\albedo\\chunk_1111_720_1126_735_albedo.dds",
-        
+
         L"data\\albedo\\chunk_1079_736_1094_751_albedo.dds",
         L"data\\albedo\\chunk_1095_736_1110_751_albedo.dds",
         L"data\\albedo\\chunk_1111_736_1126_751_albedo.dds",
 
         L"data\\albedo\\chunk_1079_752_1094_767_albedo.dds",
         L"data\\albedo\\chunk_1095_752_1110_767_albedo.dds",
-        L"data\\albedo\\chunk_1111_752_1126_767_albedo.dds"
-    };
+        L"data\\albedo\\chunk_1111_752_1126_767_albedo.dds"};
 
     // Create the array textures
     d3d12_texture_array heightArray;
@@ -650,14 +649,7 @@ int main(void)
 
     // TODO: TEST WITH UNCOMPRESSED FORMAT
     //  Create empty array resources (one SRV each)
-    if (!heightArray.create(
-            4096,    // width
-            4096,    // height
-            tileNum, // slices
-            DXGI_FORMAT_BC4_UNORM,
-            1, // mipLevels (or more if you want)
-            0  // SRV index in heap
-            ))
+    if (!heightArray.create(4096, 4096, tileNum, DXGI_FORMAT_BC4_UNORM, 1, 0))
     {
         err("Failed to create height array");
         return 1;
