@@ -60,7 +60,13 @@ VSOut VSMain(uint2 position: POSITION)
     uvLocal.y = frac(tilePos.y);
 
     // Sample height from array
-    float heightPointData = g_heightArray.SampleLevel(g_sampler, float3(uvLocal, sliceIndex), lodLevel).r;
+    // float heightPointData = g_heightArray.SampleLevel(g_sampler, float3(uvLocal, sliceIndex), lodLevel).r;
+    // Convert UV to integer texel coordinates
+    int2 pixel = int2(uvLocal * tileDim);
+
+    // Center height
+    float heightPointData =
+        g_heightArray.Load(int4(pixel.x, pixel.y, sliceIndex, 0)).r;
 
     float artistScale = (5000.0f * 0.03f) * debug_scaler;
     wp.y = heightPointData * artistScale;
@@ -70,14 +76,19 @@ VSOut VSMain(uint2 position: POSITION)
     worldPos.z += ringOffset.y;
 
     float texelWorld = ringSampleStep;
-    float texelUV = texelWorld / tileDim; // per-tile texel size in UV
+    
+    int2 leftPixel = pixel + int2(-1, 0);
+    int2 rightPixel = pixel + int2(1, 0);
+    int2 downPixel = pixel + int2(0, -1);
+    int2 upPixel = pixel + int2(0, 1);
+    float hL = g_heightArray.Load(int4(leftPixel.x, leftPixel.y, sliceIndex, 0)).r * artistScale;
+    float hR = g_heightArray.Load(int4(rightPixel.x, rightPixel.y, sliceIndex, 0)).r * artistScale;
+    float hD = g_heightArray.Load(int4(downPixel.x, downPixel.y, sliceIndex, 0)).r * artistScale;
+    float hU = g_heightArray.Load(int4(upPixel.x, upPixel.y, sliceIndex, 0)).r * artistScale;
 
-    float hL = g_heightArray.SampleLevel(g_sampler, float3(uvLocal + float2(-texelUV, 0), sliceIndex), lodLevel).r * artistScale;
-    float hR = g_heightArray.SampleLevel(g_sampler, float3(uvLocal + float2(texelUV, 0), sliceIndex), lodLevel).r * artistScale;
-    float hD = g_heightArray.SampleLevel(g_sampler, float3(uvLocal + float2(0, -texelUV), sliceIndex), lodLevel).r * artistScale;
-    float hU = g_heightArray.SampleLevel(g_sampler, float3(uvLocal + float2(0, texelUV), sliceIndex), lodLevel).r * artistScale;
-
-    float worldDelta = texelWorld * 2.0f;
+    
+    // Reconstruct normal
+    float worldDelta = texelWorld * 2.0f; // World‑space delta for normal reconstruction
     float3 dx = float3(worldDelta, hR - hL, 0.0f);
     float3 dz = float3(0.0f, hU - hD, worldDelta);
     float3 n = normalize(cross(dz, dx));
