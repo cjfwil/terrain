@@ -50,3 +50,5 @@ if exist "%WINDIR%\System32\SDL3_ttf.dll" copy /Y "%WINDIR%\System32\SDL3_ttf.dl
 
 echo Build succeeded. Output: %OUTDIR%\%OUTNAME%
 endlocal
+
+release\engine.exe

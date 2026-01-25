@@ -145,6 +145,7 @@ int main(void)
     static v3 cameraPos = {0.0f, 80.0f, 0.0f};
     static float cameraYaw = 2.45f;
     static float cameraPitch = 0.0f;
+    float fov = DirectX::XMConvertToRadians(60.0f);
 
     if (!SetExtendedMetadata())
         return 1;
@@ -1046,7 +1047,6 @@ int main(void)
         DirectX::XMMATRIX view = DirectX::XMMatrixLookAtLH(eye, at, up);
         // view = DirectX::XMMatrixIdentity();
 
-        float fov = DirectX::XMConvertToRadians(60.0f);
         float nearZ = 0.1f;
         float farZ = 9999999.0f; // TODO: change to infinite far plane???
         DirectX::XMMATRIX projection = DirectX::XMMatrixPerspectiveFovLH(fov, aspectRatio, nearZ, farZ);
@@ -1134,11 +1134,23 @@ int main(void)
 
         // NOTE: start at 1 for clipmap rings only
 
+        float h = cameraPos.y;
+        float halfFov = fov * 0.5f;
+
+        float bottomRayAngle = cameraPitch - halfFov;
+        if (bottomRayAngle > -0.001f)
+            bottomRayAngle = -0.001f;
+
+        float L = h / tanf(-bottomRayAngle);
+
+        float forwardDistance = (L > 0.0f) ? L : 0.0f;
+
         v3 cmFwd2D = cameraForward;
         cmFwd2D.y = 0;                     // for ground level
         cmFwd2D = v3::normalised(cmFwd2D); // TODO: note debug scaler here
 
-        v3 clipmapCentreLocation = cameraPos + cmFwd2D * (terrainGridDimensionInWorldUnits / 2);
+        v3 clipmapCentreLocation = cameraPos + cmFwd2D * forwardDistance;
+        // v3 clipmapCentreLocation = cameraPos + cmFwd2D * (terrainGridDimensionInWorldUnits / 2);
 
         for (int i = 0; i < activeClipmapRings; ++i)
         {
