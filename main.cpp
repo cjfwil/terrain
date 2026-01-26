@@ -170,7 +170,7 @@ int main(void)
     // init d3d12 pipeline
 
     UINT dxgiFactoryFlags = 0;
-#if defined(_DEBUG_DX12)
+#if defined(_DEBUG)
     // Enable the debug layer (requires the Graphics Tools "optional feature").
     // NOTE: Enabling the debug layer after device creation will invalidate the active device.
     {
@@ -619,35 +619,30 @@ int main(void)
     //     return 1;
     // }
 
-    // Number of tiles you want to load into the array
+    // 3×3 = 9 tiles
     const uint32_t tileNum = 9;
 
-    // Filenames for each tile
-    wchar_t *heightmapFilenames[tileNum] = {
-        L"data\\height\\chunk_1079_720_1094_735_height.dds",
-        L"data\\height\\chunk_1095_720_1110_735_height.dds",
-        L"data\\height\\chunk_1111_720_1126_735_height.dds",
+    // Arrays of wchar_t filenames
+    static wchar_t heightmapFilenames[9][256];
+    static wchar_t albedoFilenames[9][256];
 
-        L"data\\height\\chunk_1079_736_1094_751_height.dds",
-        L"data\\height\\chunk_1095_736_1110_751_height.dds",
-        L"data\\height\\chunk_1111_736_1126_751_height.dds",
+    uint32_t startingSegmentX = 0;
+    uint32_t startingSegmentY = 6;
 
-        L"data\\height\\chunk_1079_752_1094_767_height.dds",
-        L"data\\height\\chunk_1095_752_1110_767_height.dds",
-        L"data\\height\\chunk_1111_752_1126_767_height.dds"};
+    uint32_t endingSegmentX = startingSegmentX +3;
+    uint32_t endingSegmentY = startingSegmentY +3;
 
-    wchar_t *albedoFilenames[tileNum] = {
-        L"data\\albedo\\chunk_1079_720_1094_735_albedo.dds",
-        L"data\\albedo\\chunk_1095_720_1110_735_albedo.dds",
-        L"data\\albedo\\chunk_1111_720_1126_735_albedo.dds",
-
-        L"data\\albedo\\chunk_1079_736_1094_751_albedo.dds",
-        L"data\\albedo\\chunk_1095_736_1110_751_albedo.dds",
-        L"data\\albedo\\chunk_1111_736_1126_751_albedo.dds",
-
-        L"data\\albedo\\chunk_1079_752_1094_767_albedo.dds",
-        L"data\\albedo\\chunk_1095_752_1110_767_albedo.dds",
-        L"data\\albedo\\chunk_1111_752_1126_767_albedo.dds"};
+    // Fill in row-major order (0,0) → (2,0) → (0,1) → ... → (2,2)
+    uint32_t index = 0;
+    for (uint32_t y = startingSegmentY; y < endingSegmentY; ++y)
+    {
+        for (uint32_t x = startingSegmentX; x < endingSegmentX; ++x)
+        {
+            swprintf(heightmapFilenames[index], 256, L"data\\height\\chunk_height_%u_%u.dds", x, y);
+            swprintf(albedoFilenames[index], 256, L"data\\albedo\\chunk_albedo_%u_%u.dds", x, y);
+            index++;
+        }
+    }
 
     // Create the array textures
     // d3d12_texture_array heightArray;
@@ -695,8 +690,8 @@ int main(void)
 
     for (UINT i = 0; i < tileNum; i++)
     {
-        heightTiles[i].loadFromDDS(heightmapFilenames[i], i, false);   // SRV indices 0..8
-        albedoTiles[i].loadFromDDS(albedoFilenames[i], 100 + i, true); // SRV indices 100..108
+        heightTiles[i].loadFromDDS(heightmapFilenames[i], i, false);
+        albedoTiles[i].loadFromDDS(albedoFilenames[i], tileNum + i, true);
     }
 
     constantBufferData.tileCount = tileNum;

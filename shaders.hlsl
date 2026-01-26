@@ -125,7 +125,7 @@ float4 PSMain(VSOut IN) : SV_Target
     const float ambient = 0.2f;
 
     uint heightIndex = IN.texIndex;      // 0..8
-    uint albedoIndex = IN.texIndex + 99; // so heap index = 1 + 99 + texIndex = 100 + texIndex
+    uint albedoIndex = IN.texIndex + (tileCount-1); // so heap index = 1 + 99 + texIndex = 100 + texIndex
 
     float4 sampleData =
         g_albedoTex[albedoIndex].Sample(g_sampler, IN.uvLocal);
