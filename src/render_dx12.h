@@ -389,6 +389,139 @@ struct d3d12_texture_2d
     }
 };
 
+struct d3d12_bindless_texture
+{
+    ID3D12Resource* texture;
+    ID3D12Resource* uploadHeap;
+    UINT descriptorIndex;
+    UINT mipLevels;
+    DXGI_FORMAT format;
+    UINT width;
+    UINT height;
+
+    bool loadFromDDS(const wchar_t* filename, UINT srvIndex, bool useMips)
+    {
+        texture = nullptr;
+        uploadHeap = nullptr;
+        descriptorIndex = srvIndex;
+
+        DirectX::ScratchImage image;
+        DirectX::TexMetadata metadata;
+
+        HRESULT hr = DirectX::LoadFromDDSFile(
+            filename,
+            DirectX::DDS_FLAGS_NONE,
+            &metadata,
+            image);
+
+        if (FAILED(hr))
+        {
+            errhr(L"LoadFromDDSFile failed", hr);
+            return false;
+        }
+
+        width = (UINT)metadata.width;
+        height = (UINT)metadata.height;
+        mipLevels = useMips ? (UINT)metadata.mipLevels : 1;
+        format = metadata.format;
+
+        // --- Create GPU texture ---
+        D3D12_RESOURCE_DESC desc = {};
+        desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        desc.Width = width;
+        desc.Height = height;
+        desc.DepthOrArraySize = 1;
+        desc.MipLevels = (UINT16)mipLevels;
+        desc.Format = format;
+        desc.SampleDesc.Count = 1;
+        desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+        desc.Flags = D3D12_RESOURCE_FLAG_NONE;
+
+        CD3DX12_HEAP_PROPERTIES heapPropsDefault(D3D12_HEAP_TYPE_DEFAULT);
+
+        hr = renderState.device->CreateCommittedResource(
+            &heapPropsDefault,
+            D3D12_HEAP_FLAG_NONE,
+            &desc,
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            nullptr,
+            IID_PPV_ARGS(&texture));
+
+        if (FAILED(hr))
+        {
+            errhr(L"CreateCommittedResource (texture)", hr);
+            return false;
+        }
+
+        // --- Prepare subresources (no std::vector) ---
+        const DirectX::Image* imgs = image.GetImages();
+
+        D3D12_SUBRESOURCE_DATA subresources[32]; // supports up to 32 mips
+        UINT count = mipLevels;
+
+        for (UINT i = 0; i < count; i++)
+        {
+            subresources[i].pData = imgs[i].pixels;
+            subresources[i].RowPitch = imgs[i].rowPitch;
+            subresources[i].SlicePitch = imgs[i].slicePitch;
+        }
+
+        // --- Create upload heap ---
+        UINT64 uploadSize = GetRequiredIntermediateSize(texture, 0, count);
+
+        CD3DX12_HEAP_PROPERTIES heapPropsUpload(D3D12_HEAP_TYPE_UPLOAD);
+        auto uploadDesc = CD3DX12_RESOURCE_DESC::Buffer(uploadSize);
+
+        hr = renderState.device->CreateCommittedResource(
+            &heapPropsUpload,
+            D3D12_HEAP_FLAG_NONE,
+            &uploadDesc,
+            D3D12_RESOURCE_STATE_GENERIC_READ,
+            nullptr,
+            IID_PPV_ARGS(&uploadHeap));
+
+        if (FAILED(hr))
+        {
+            errhr(L"CreateCommittedResource (upload buffer)", hr);
+            return false;
+        }
+
+        // --- Upload ---
+        UpdateSubresources(
+            renderState.commandList,
+            texture,
+            uploadHeap,
+            0, 0,
+            count,
+            subresources);
+
+        // --- Transition to SRV state ---
+        auto barrier = CD3DX12_RESOURCE_BARRIER::Transition(
+            texture,
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+
+        renderState.commandList->ResourceBarrier(1, &barrier);
+
+        // --- Create SRV ---
+        D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+        srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srvDesc.Format = format;
+        srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        srvDesc.Texture2D.MipLevels = mipLevels;
+
+        D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle =
+            renderState.srvHeap->GetCPUDescriptorHandleForHeapStart();
+        cpuHandle.ptr += descriptorIndex * renderState.cbvSrvDescriptorSize;
+
+        renderState.device->CreateShaderResourceView(texture, &srvDesc, cpuHandle);
+
+        return true;
+    }
+};
+
+
 struct d3d12_texture_array
 {
     ID3D12Resource *texture = nullptr; // The Texture2DArray resource

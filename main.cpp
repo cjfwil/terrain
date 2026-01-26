@@ -170,7 +170,7 @@ int main(void)
     // init d3d12 pipeline
 
     UINT dxgiFactoryFlags = 0;
-#if defined(_DEBUG)
+#if defined(_DEBUG_DX12)
     // Enable the debug layer (requires the Graphics Tools "optional feature").
     // NOTE: Enabling the debug layer after device creation will invalidate the active device.
     {
@@ -276,7 +276,7 @@ int main(void)
         return 1;
     }
 
-    const int maxSRVDescriptors = 2;
+    const int maxSRVDescriptors = 1024;
     D3D12_DESCRIPTOR_HEAP_DESC srvHeapDesc = {};
     srvHeapDesc.NumDescriptors = maxSRVDescriptors; // CBV + SRV
     srvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
@@ -401,13 +401,18 @@ int main(void)
         featureData.HighestVersion = D3D_ROOT_SIGNATURE_VERSION_1_0;
     }
 
-    CD3DX12_DESCRIPTOR_RANGE1 ranges[2];
-    ranges[0].Init(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, 1, 0);
-    ranges[1].Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, maxSRVDescriptors, 0, 0, D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC);
+    // bindless root signature:
+    CD3DX12_DESCRIPTOR_RANGE1 srvRange;
+    srvRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
+                  maxSRVDescriptors,
+                  0,                                                 // base shader register t0
+                  1,                                                 // register space = space1
+                  D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE); // volatile is fine for bindless
+
+    // Root parameters
     CD3DX12_ROOT_PARAMETER1 rootParameters[2];
-    // rootParameters[0].InitAsDescriptorTable(1, &ranges[0], D3D12_SHADER_VISIBILITY_VERTEX); // crv
-    rootParameters[0].InitAsConstantBufferView(0);
-    rootParameters[1].InitAsDescriptorTable(1, &ranges[1], D3D12_SHADER_VISIBILITY_ALL); // srv
+    rootParameters[0].InitAsConstantBufferView(0); // const buffer
+    rootParameters[1].InitAsDescriptorTable(1, &srvRange, D3D12_SHADER_VISIBILITY_ALL);
 
     // TODO: abstract out into reusable
     D3D12_STATIC_SAMPLER_DESC sampler = {};
@@ -645,44 +650,53 @@ int main(void)
         L"data\\albedo\\chunk_1111_752_1126_767_albedo.dds"};
 
     // Create the array textures
-    d3d12_texture_array heightArray;
-    d3d12_texture_array albedoArray;
+    // d3d12_texture_array heightArray;
+    // d3d12_texture_array albedoArray;
 
-    // TODO: TEST WITH UNCOMPRESSED FORMAT
-    //  Create empty array resources (one SRV each)
-    if (!heightArray.create(4096, 4096, tileNum, DXGI_FORMAT_BC4_UNORM, 1, 0))
+    // // TODO: TEST WITH UNCOMPRESSED FORMAT
+    // //  Create empty array resources (one SRV each)
+    // if (!heightArray.create(4096, 4096, tileNum, DXGI_FORMAT_BC4_UNORM, 1, 0))
+    // {
+    //     err("Failed to create height array");
+    //     return 1;
+    // }
+
+    // if (!albedoArray.create(
+    //         4096,
+    //         4096,
+    //         tileNum,
+    //         DXGI_FORMAT_BC1_UNORM,
+    //         13, // mipLevels TODO: automatically do this.
+    //         1   // SRV index in heap
+    //         ))
+    // {
+    //     err("Failed to create albedo array");
+    //     return 1;
+    // }
+
+    // // Upload each tile into its slice
+    // for (uint32_t i = 0; i < tileNum; i++)
+    // {
+    //     if (!heightArray.uploadSliceFromDDS(heightmapFilenames[i], i, false))
+    //     {
+    //         err("Failed to upload height slice");
+    //         return 1;
+    //     }
+
+    //     if (!albedoArray.uploadSliceFromDDS(albedoFilenames[i], i, true))
+    //     {
+    //         err("Failed to upload albedo slice");
+    //         return 1;
+    //     }
+    // }
+
+    d3d12_bindless_texture heightTiles[tileNum];
+    d3d12_bindless_texture albedoTiles[tileNum];
+
+    for (UINT i = 0; i < tileNum; i++)
     {
-        err("Failed to create height array");
-        return 1;
-    }
-
-    if (!albedoArray.create(
-            4096,
-            4096,
-            tileNum,
-            DXGI_FORMAT_BC1_UNORM,
-            13, // mipLevels TODO: automatically do this.
-            1   // SRV index in heap
-            ))
-    {
-        err("Failed to create albedo array");
-        return 1;
-    }
-
-    // Upload each tile into its slice
-    for (uint32_t i = 0; i < tileNum; i++)
-    {
-        if (!heightArray.uploadSliceFromDDS(heightmapFilenames[i], i, false))
-        {
-            err("Failed to upload height slice");
-            return 1;
-        }
-
-        if (!albedoArray.uploadSliceFromDDS(albedoFilenames[i], i, true))
-        {
-            err("Failed to upload albedo slice");
-            return 1;
-        }
+        heightTiles[i].loadFromDDS(heightmapFilenames[i], i, false);   // SRV indices 0..8
+        albedoTiles[i].loadFromDDS(albedoFilenames[i], 100 + i, true); // SRV indices 100..108
     }
 
     constantBufferData.tileCount = tileNum;

@@ -7,11 +7,11 @@ struct VSOut
     float2 uvLocal : TEXCOORD1;
     float3 normalWS : TEXCOORD2;
     float2 water : TEXCOORD3;
-    int sliceIndex : TEXCOORD4;
+    uint texIndex : TEXCOORD4;
 };
 
-Texture2DArray<float> g_heightArray : register(t0);
-Texture2DArray<float4> g_albedoArray : register(t1);
+Texture2D<float> g_heightTex[] : register(t0, space1);
+Texture2D<float4> g_albedoTex[] : register(t1, space1);
 
 SamplerState g_sampler : register(s0);
 
@@ -42,7 +42,6 @@ VSOut VSMain(uint2 position: POSITION)
     float2 pUv = wp.xz + 0.5f + ringOffset;
     float2 uvGlobal = float2(1.0 - pUv.x, pUv.y) / virtualDim;
 
-    // --- Tile selection in 2D (2x2 grid) ---
     float2 tilePos = float2(uvGlobal.x * tilesPerRow,
                             uvGlobal.y * tilesPerCol);
 
@@ -52,7 +51,7 @@ VSOut VSMain(uint2 position: POSITION)
     ix = clamp(ix, 0, (int)tilesPerRow - 1);
     iy = clamp(iy, 0, (int)tilesPerCol - 1);
 
-    int sliceIndex = iy * (int)tilesPerRow + ix; // 0..3
+    uint texIndex = (uint)(iy * (int)tilesPerRow + ix);
 
     // Local UV inside that tile
     float2 uvLocal;
@@ -65,8 +64,7 @@ VSOut VSMain(uint2 position: POSITION)
     int2 pixel = int2(uvLocal * tileDim);
 
     // Center height
-    float heightPointData =
-        g_heightArray.Load(int4(pixel.x, pixel.y, sliceIndex, 0)).r;
+    float heightPointData = g_heightTex[texIndex].Load(int3(pixel.x, pixel.y, 0)).r;
 
     float artistScale = (5000.0f * 0.03f) * debug_scaler;
     wp.y = heightPointData * artistScale;
@@ -76,17 +74,16 @@ VSOut VSMain(uint2 position: POSITION)
     worldPos.z += ringOffset.y;
 
     float texelWorld = ringSampleStep;
-    
+
     int2 leftPixel = pixel + int2(-1, 0);
     int2 rightPixel = pixel + int2(1, 0);
     int2 downPixel = pixel + int2(0, -1);
     int2 upPixel = pixel + int2(0, 1);
-    float hL = g_heightArray.Load(int4(leftPixel.x, leftPixel.y, sliceIndex, 0)).r * artistScale;
-    float hR = g_heightArray.Load(int4(rightPixel.x, rightPixel.y, sliceIndex, 0)).r * artistScale;
-    float hD = g_heightArray.Load(int4(downPixel.x, downPixel.y, sliceIndex, 0)).r * artistScale;
-    float hU = g_heightArray.Load(int4(upPixel.x, upPixel.y, sliceIndex, 0)).r * artistScale;
+    float hL = g_heightTex[texIndex].Load(int3(leftPixel, 0)).r * artistScale;
+    float hR = g_heightTex[texIndex].Load(int3(rightPixel, 0)).r * artistScale;
+    float hD = g_heightTex[texIndex].Load(int3(downPixel, 0)).r * artistScale;
+    float hU = g_heightTex[texIndex].Load(int3(upPixel, 0)).r * artistScale;
 
-    
     // Reconstruct normal
     float worldDelta = texelWorld * 2.0f; // World‑space delta for normal reconstruction
     float3 dx = float3(worldDelta, hR - hL, 0.0f);
@@ -116,7 +113,7 @@ VSOut VSMain(uint2 position: POSITION)
 
     o.worldPos = worldPos;
     o.uvLocal = uvLocal;
-    o.sliceIndex = sliceIndex;
+    o.texIndex = texIndex;
 
     return o;
 }
@@ -127,15 +124,16 @@ float4 PSMain(VSOut IN) : SV_Target
     const float3 lightColor = float3(1.0f, 0.98f, 0.9f);
     const float ambient = 0.2f;
 
-    int sliceIndex = IN.sliceIndex;
+    uint heightIndex = IN.texIndex;      // 0..8
+    uint albedoIndex = IN.texIndex + 99; // so heap index = 1 + 99 + texIndex = 100 + texIndex
 
     float4 sampleData =
-        g_albedoArray.Sample(g_sampler, float3(IN.uvLocal, sliceIndex));
+        g_albedoTex[albedoIndex].Sample(g_sampler, IN.uvLocal);
 
     float wetness = clamp(IN.water.y, 0.0f, 1.0f);
     float blendStrength = 0.6f;
-    float3 landColor = lerp(float3(0.8f, 0.75f, 0.5f), sampleData.rgb, blendStrength);
-    // float3 waterColor = lerp(float3(0.0f, 0.3f, 0.8f), landColor, 0.5f);
+    float3 landColor = lerp(float3(0.8f, 0.75f, 0.5f),
+                            sampleData.rgb, blendStrength);
 
     float3 base = landColor;
     float4 albedo = float4(base, 1.0f);
