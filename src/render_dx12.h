@@ -59,11 +59,9 @@ static struct
     float planetScaleRatio = 1.0f / 75.0f;
     int terrainGridDimensionInVertices;
     float debug_scaler = 1.0f;
-
-    int heightmapBase;
-    int albedoBase;
-    int tileCount;
-
+    
+    unsigned int tileCount;
+    unsigned int visibleTileWidth;
 } constantBufferData;
 
 struct vertex

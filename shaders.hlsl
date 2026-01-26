@@ -35,8 +35,8 @@ VSOut VSMain(uint2 position: POSITION)
     wp = mul(world, wp);
 
     float tileDim = 4096.0f;
-    float tilesPerRow = 3.0f;
-    float tilesPerCol = 3.0f;
+    float tilesPerRow = visibleTilesWidth;
+    float tilesPerCol = visibleTilesWidth;
     float2 virtualDim = float2(tileDim * tilesPerRow, tileDim * tilesPerCol);
 
     float2 pUv = wp.xz + 0.5f + ringOffset;

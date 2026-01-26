@@ -16,9 +16,8 @@ cbuffer SceneConstantBuffer : register(b0)
     float debug_scaler;
 
     // Bindless tile info
-    uint heightmapBase;
-    uint albedoBase;
     uint tileCount;
+    uint visibleTilesWidth;
 };
 
 #endif

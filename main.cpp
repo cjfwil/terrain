@@ -611,17 +611,21 @@ int main(void)
     // renderState.bundle->DrawInstanced(terrainMeshSizeInVertices, 1, 0, 0);
     renderState.bundle->Close();    
     
-    
-    const uint32_t visibleTileNum = 9;    
+    const uint32_t worldSizeTerrainTilesW = 19;
+    const uint32_t worldSizeTerrainTilesH = 8;
+
+    const uint32_t visibleTileWidth = 4;
+    constantBufferData.visibleTileWidth = visibleTileWidth;
+    const uint32_t visibleTileNum = visibleTileWidth*visibleTileWidth;
     
     static wchar_t heightmapFilenames[visibleTileNum][256];
     static wchar_t albedoFilenames[visibleTileNum][256];
 
-    uint32_t startingSegmentX = 6;
-    uint32_t startingSegmentY = 0;
+    uint32_t startingSegmentX = 0;
+    uint32_t startingSegmentY = 3;
 
-    uint32_t endingSegmentX = startingSegmentX +3;
-    uint32_t endingSegmentY = startingSegmentY +3;
+    uint32_t endingSegmentX = SDL_clamp(startingSegmentX +visibleTileWidth, 0, worldSizeTerrainTilesW);
+    uint32_t endingSegmentY = SDL_clamp(startingSegmentY +visibleTileWidth, 0, worldSizeTerrainTilesH);
     
     uint32_t index = 0;
     for (uint32_t y = startingSegmentY; y < endingSegmentY; ++y)
