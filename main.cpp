@@ -609,30 +609,20 @@ int main(void)
     renderState.bundle->DrawIndexedInstanced(baked_heightmap_mesh.terrainMeshIndexBufferNum, 1, 0, 0, 0);
 
     // renderState.bundle->DrawInstanced(terrainMeshSizeInVertices, 1, 0, 0);
-    renderState.bundle->Close();
+    renderState.bundle->Close();    
+    
+    
+    const uint32_t visibleTileNum = 9;    
+    
+    static wchar_t heightmapFilenames[visibleTileNum][256];
+    static wchar_t albedoFilenames[visibleTileNum][256];
 
-    // beginning of texture
-    // d3d12_texture gravelTexture;
-    // if (!gravelTexture.create(L"gravel.dds"))
-    // {
-    //     err("Create Texture (gravelTexture) failed.");
-    //     return 1;
-    // }
-
-    // 3×3 = 9 tiles
-    const uint32_t tileNum = 9;
-
-    // Arrays of wchar_t filenames
-    static wchar_t heightmapFilenames[9][256];
-    static wchar_t albedoFilenames[9][256];
-
-    uint32_t startingSegmentX = 0;
-    uint32_t startingSegmentY = 6;
+    uint32_t startingSegmentX = 6;
+    uint32_t startingSegmentY = 0;
 
     uint32_t endingSegmentX = startingSegmentX +3;
     uint32_t endingSegmentY = startingSegmentY +3;
-
-    // Fill in row-major order (0,0) → (2,0) → (0,1) → ... → (2,2)
+    
     uint32_t index = 0;
     for (uint32_t y = startingSegmentY; y < endingSegmentY; ++y)
     {
@@ -644,57 +634,16 @@ int main(void)
         }
     }
 
-    // Create the array textures
-    // d3d12_texture_array heightArray;
-    // d3d12_texture_array albedoArray;
+    d3d12_bindless_texture heightTiles[visibleTileNum];
+    d3d12_bindless_texture albedoTiles[visibleTileNum];
 
-    // // TODO: TEST WITH UNCOMPRESSED FORMAT
-    // //  Create empty array resources (one SRV each)
-    // if (!heightArray.create(4096, 4096, tileNum, DXGI_FORMAT_BC4_UNORM, 1, 0))
-    // {
-    //     err("Failed to create height array");
-    //     return 1;
-    // }
-
-    // if (!albedoArray.create(
-    //         4096,
-    //         4096,
-    //         tileNum,
-    //         DXGI_FORMAT_BC1_UNORM,
-    //         13, // mipLevels TODO: automatically do this.
-    //         1   // SRV index in heap
-    //         ))
-    // {
-    //     err("Failed to create albedo array");
-    //     return 1;
-    // }
-
-    // // Upload each tile into its slice
-    // for (uint32_t i = 0; i < tileNum; i++)
-    // {
-    //     if (!heightArray.uploadSliceFromDDS(heightmapFilenames[i], i, false))
-    //     {
-    //         err("Failed to upload height slice");
-    //         return 1;
-    //     }
-
-    //     if (!albedoArray.uploadSliceFromDDS(albedoFilenames[i], i, true))
-    //     {
-    //         err("Failed to upload albedo slice");
-    //         return 1;
-    //     }
-    // }
-
-    d3d12_bindless_texture heightTiles[tileNum];
-    d3d12_bindless_texture albedoTiles[tileNum];
-
-    for (UINT i = 0; i < tileNum; i++)
+    for (UINT i = 0; i < visibleTileNum; i++)
     {
         heightTiles[i].loadFromDDS(heightmapFilenames[i], i, false);
-        albedoTiles[i].loadFromDDS(albedoFilenames[i], tileNum + i, true);
+        albedoTiles[i].loadFromDDS(albedoFilenames[i], visibleTileNum + i, true);
     }
 
-    constantBufferData.tileCount = tileNum;
+    constantBufferData.tileCount = visibleTileNum;
     // end of texture
 
     renderState.commandList->Close();
