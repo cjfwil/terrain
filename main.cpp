@@ -609,42 +609,48 @@ int main(void)
     renderState.bundle->DrawIndexedInstanced(baked_heightmap_mesh.terrainMeshIndexBufferNum, 1, 0, 0, 0);
 
     // renderState.bundle->DrawInstanced(terrainMeshSizeInVertices, 1, 0, 0);
-    renderState.bundle->Close();    
-    
+    renderState.bundle->Close();
+
     const uint32_t worldSizeTerrainTilesW = 19;
     const uint32_t worldSizeTerrainTilesH = 8;
+    const uint32_t worldSizeTerrainTilesNum = worldSizeTerrainTilesW * worldSizeTerrainTilesH;
 
     const uint32_t visibleTileWidth = 3;
     constantBufferData.visibleTileWidth = visibleTileWidth;
-    const uint32_t visibleTileNum = visibleTileWidth*visibleTileWidth;
-    
-    static wchar_t heightmapFilenames[visibleTileNum][256];
-    static wchar_t albedoFilenames[visibleTileNum][256];
+    const uint32_t visibleTileNum = visibleTileWidth * visibleTileWidth;
 
-    // uint32_t startingSegmentX = 0;
-    // uint32_t startingSegmentY = 0;
+    static wchar_t heightmapFilenames[worldSizeTerrainTilesNum][256];
+    static wchar_t albedoFilenames[worldSizeTerrainTilesNum][256];
 
-    // uint32_t endingSegmentX = SDL_clamp(startingSegmentX +visibleTileWidth, 0, worldSizeTerrainTilesW);
-    // uint32_t endingSegmentY = SDL_clamp(startingSegmentY +visibleTileWidth, 0, worldSizeTerrainTilesH);
-    
-    uint32_t index = 0;
-    for (uint32_t y = 0; y < 3; ++y)
+    for (uint32_t y = 0; y < worldSizeTerrainTilesH; ++y)
     {
-        for (uint32_t x = 0; x < 3; ++x)
+        for (uint32_t x = 0; x < worldSizeTerrainTilesW; ++x)
         {
+            uint32_t index = x + y * worldSizeTerrainTilesW;
             swprintf(heightmapFilenames[index], 256, L"data\\height\\chunk_height_%u_%u.dds", x, y);
             swprintf(albedoFilenames[index], 256, L"data\\albedo\\chunk_albedo_%u_%u.dds", x, y);
-            index++;
         }
     }
 
     d3d12_bindless_texture heightTiles[visibleTileNum];
     d3d12_bindless_texture albedoTiles[visibleTileNum];
 
-    for (UINT i = 0; i < visibleTileNum; i++)
+    uint32_t startingSegmentX = 0;
+    uint32_t startingSegmentY = 0;
+
+    uint32_t endingSegmentX = SDL_clamp(startingSegmentX + visibleTileWidth, 0, worldSizeTerrainTilesW);
+    uint32_t endingSegmentY = SDL_clamp(startingSegmentY + visibleTileWidth, 0, worldSizeTerrainTilesH);
+
+    uint32_t indexVisibleTiles = 0;
+    for (uint32_t y = startingSegmentY; y < endingSegmentY; ++y)
     {
-        heightTiles[i].loadFromDDS(heightmapFilenames[i], i, false);
-        albedoTiles[i].loadFromDDS(albedoFilenames[i], visibleTileNum + i, true);
+        for (uint32_t x = startingSegmentX; x < endingSegmentX; ++x)
+        {
+            uint32_t fn_i = x + y * worldSizeTerrainTilesW;
+            heightTiles[indexVisibleTiles].loadFromDDS(heightmapFilenames[fn_i], indexVisibleTiles, false);
+            albedoTiles[indexVisibleTiles].loadFromDDS(albedoFilenames[fn_i], visibleTileNum + indexVisibleTiles, true);
+            indexVisibleTiles++;
+        }
     }
 
     constantBufferData.tileCount = visibleTileNum;
