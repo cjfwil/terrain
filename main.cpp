@@ -614,23 +614,23 @@ int main(void)
     const uint32_t worldSizeTerrainTilesW = 19;
     const uint32_t worldSizeTerrainTilesH = 8;
 
-    const uint32_t visibleTileWidth = 4;
+    const uint32_t visibleTileWidth = 3;
     constantBufferData.visibleTileWidth = visibleTileWidth;
     const uint32_t visibleTileNum = visibleTileWidth*visibleTileWidth;
     
     static wchar_t heightmapFilenames[visibleTileNum][256];
     static wchar_t albedoFilenames[visibleTileNum][256];
 
-    uint32_t startingSegmentX = 0;
-    uint32_t startingSegmentY = 3;
+    // uint32_t startingSegmentX = 0;
+    // uint32_t startingSegmentY = 0;
 
-    uint32_t endingSegmentX = SDL_clamp(startingSegmentX +visibleTileWidth, 0, worldSizeTerrainTilesW);
-    uint32_t endingSegmentY = SDL_clamp(startingSegmentY +visibleTileWidth, 0, worldSizeTerrainTilesH);
+    // uint32_t endingSegmentX = SDL_clamp(startingSegmentX +visibleTileWidth, 0, worldSizeTerrainTilesW);
+    // uint32_t endingSegmentY = SDL_clamp(startingSegmentY +visibleTileWidth, 0, worldSizeTerrainTilesH);
     
     uint32_t index = 0;
-    for (uint32_t y = startingSegmentY; y < endingSegmentY; ++y)
+    for (uint32_t y = 0; y < 3; ++y)
     {
-        for (uint32_t x = startingSegmentX; x < endingSegmentX; ++x)
+        for (uint32_t x = 0; x < 3; ++x)
         {
             swprintf(heightmapFilenames[index], 256, L"data\\height\\chunk_height_%u_%u.dds", x, y);
             swprintf(albedoFilenames[index], 256, L"data\\albedo\\chunk_albedo_%u_%u.dds", x, y);
