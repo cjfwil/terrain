@@ -46,6 +46,7 @@ struct dxc_context
     }
 };
 
+
 static struct
 {
     DirectX::XMFLOAT4X4 world;

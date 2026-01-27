@@ -565,7 +565,7 @@ int main(void)
     // TODO: make reusuable constant buffer stuff
 
     // create constant buffer
-    const UINT constantBufferSize = 256U;
+    const UINT constantBufferSize = 512U;
     static UINT *CbvDataBegin = nullptr;
 
     const UINT TotalCBSize = constantBufferSize * maxClipmapRings;
@@ -615,7 +615,7 @@ int main(void)
     const uint32_t worldSizeTerrainTilesH = 8;
     const uint32_t worldSizeTerrainTilesNum = worldSizeTerrainTilesW * worldSizeTerrainTilesH;
 
-    const uint32_t visibleTileWidth = 3;
+    const uint32_t visibleTileWidth = 4;
     constantBufferData.visibleTileWidth = visibleTileWidth;
     const uint32_t visibleTileNum = visibleTileWidth * visibleTileWidth;
 
@@ -635,7 +635,7 @@ int main(void)
     d3d12_bindless_texture heightTiles[visibleTileNum];
     d3d12_bindless_texture albedoTiles[visibleTileNum];
 
-    uint32_t startingSegmentX = 0;
+    uint32_t startingSegmentX = 6;
     uint32_t startingSegmentY = 0;
 
     uint32_t endingSegmentX = SDL_clamp(startingSegmentX + visibleTileWidth, 0, worldSizeTerrainTilesW);
