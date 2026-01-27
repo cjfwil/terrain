@@ -22,6 +22,21 @@ float hash21(float2 p)
     return frac(p.x * p.y);
 }
 
+// Hardcoded descriptor mapping for testing TODO: REMOVE
+static const uint heightSRV[16] = {
+    0, 1, 2, 3,
+    4, 5, 6, 7,
+    8, 9, 10, 11,
+    12, 13, 14, 15
+};
+
+static const uint albedoSRV[16] = {
+    16, 17, 18, 19,
+    20, 21, 22, 23,
+    24, 25, 26, 27,
+    28, 29, 30, 31
+};
+
 VSOut VSMain(uint2 position: POSITION)
 {
     int lodLevel = 0;
@@ -53,6 +68,9 @@ VSOut VSMain(uint2 position: POSITION)
 
     uint texIndex = (uint)(iy * (int)tilesPerRow + ix);
 
+    // uint heightIndex = texIndex;
+    uint heightIndex = heightSRV[texIndex];
+
     // Local UV inside that tile
     float2 uvLocal;
     uvLocal.x = frac(tilePos.x);
@@ -64,7 +82,7 @@ VSOut VSMain(uint2 position: POSITION)
     int2 pixel = int2(uvLocal * tileDim);
 
     // Center height
-    float heightPointData = g_heightTex[texIndex].Load(int3(pixel.x, pixel.y, 0)).r;
+    float heightPointData = g_heightTex[heightIndex].Load(int3(pixel.x, pixel.y, 0)).r;
 
     float artistScale = (5000.0f * 0.03f) * debug_scaler;
     wp.y = heightPointData * artistScale;
@@ -79,10 +97,10 @@ VSOut VSMain(uint2 position: POSITION)
     int2 rightPixel = pixel + int2(1, 0);
     int2 downPixel = pixel + int2(0, -1);
     int2 upPixel = pixel + int2(0, 1);
-    float hL = g_heightTex[texIndex].Load(int3(leftPixel, 0)).r * artistScale;
-    float hR = g_heightTex[texIndex].Load(int3(rightPixel, 0)).r * artistScale;
-    float hD = g_heightTex[texIndex].Load(int3(downPixel, 0)).r * artistScale;
-    float hU = g_heightTex[texIndex].Load(int3(upPixel, 0)).r * artistScale;
+    float hL = g_heightTex[heightIndex].Load(int3(leftPixel, 0)).r * artistScale;
+    float hR = g_heightTex[heightIndex].Load(int3(rightPixel, 0)).r * artistScale;
+    float hD = g_heightTex[heightIndex].Load(int3(downPixel, 0)).r * artistScale;
+    float hU = g_heightTex[heightIndex].Load(int3(upPixel, 0)).r * artistScale;
 
     // Reconstruct normal
     float worldDelta = texelWorld * 2.0f; // World‑space delta for normal reconstruction
@@ -118,14 +136,26 @@ VSOut VSMain(uint2 position: POSITION)
     return o;
 }
 
+// float4 PSMain(VSOut IN) : SV_Target
+// {
+//     // IN.texIndex should be 0..(visibleTilesWidth*visibleTilesWidth - 1)
+//     float maxIndex = (float)(tileCount - 1);
+
+//     // Normalise to 0..1
+//     float v = (float)IN.texIndex / maxIndex;
+
+//     // Output as grayscale
+//     return float4(v, v, v, 1.0f);
+// }
+
 float4 PSMain(VSOut IN) : SV_Target
 {
     const float3 lightDir = normalize(float3(0.5f, -1.0f, 0.2f));
     const float3 lightColor = float3(1.0f, 0.98f, 0.9f);
     const float ambient = 0.2f;
 
-    uint heightIndex = IN.texIndex;      // 0..8
-    uint albedoIndex = IN.texIndex + (tileCount-1); // so heap index = 1 + 99 + texIndex = 100 + texIndex
+    // uint albedoIndex = IN.texIndex + (tileCount-1);
+    uint albedoIndex = albedoSRV[IN.texIndex];    
 
     float4 sampleData =
         g_albedoTex[albedoIndex].Sample(g_sampler, IN.uvLocal);

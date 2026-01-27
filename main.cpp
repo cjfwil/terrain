@@ -648,7 +648,10 @@ int main(void)
         {
             uint32_t fn_i = x + y * worldSizeTerrainTilesW;
             heightTiles[indexVisibleTiles].loadFromDDS(heightmapFilenames[fn_i], indexVisibleTiles, false);
-            albedoTiles[indexVisibleTiles].loadFromDDS(albedoFilenames[fn_i], visibleTileNum + indexVisibleTiles, true);
+            albedoTiles[indexVisibleTiles].loadFromDDS(albedoFilenames[fn_i], visibleTileNum + indexVisibleTiles+1, true);
+            SDL_Log("Height tile %u -> slot %u\n", fn_i, indexVisibleTiles);
+            SDL_Log("Albedo tile %u -> slot %u\n", fn_i, visibleTileNum + indexVisibleTiles + 1);
+
             indexVisibleTiles++;
         }
     }
