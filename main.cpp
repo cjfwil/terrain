@@ -144,10 +144,11 @@ static struct
 int main(void)
 {
     // todo game state struct:
-    // static v3 cameraPos = {4096.0f, 120.0f, 4096.0f};
+    // static v3 cameraPos = {terrainTileInWorldUnits, 120.0f, terrainTileInWorldUnits};
     static v3 cameraPos = {0.0f, 80.0f, 0.0f};
     static float cameraYaw = 2.45f;
     static float cameraPitch = 0.0f;
+    static float terrainTileInWorldUnits = 4096.0f;
     float fov = DirectX::XMConvertToRadians(60.0f);
 
     if (!SetExtendedMetadata())
@@ -865,7 +866,7 @@ int main(void)
 
             ImGui::SliderInt("Clipmaps", &activeClipmapRings, 1, maxClipmapRings);
 
-            ImGui::SliderFloat("Debug Speed Boost", &debugBoostSpeed, 1.0f, 1000.0f, "%.3f", ImGuiSliderFlags_Logarithmic);
+            ImGui::SliderFloat("Debug Speed Boost", &debugBoostSpeed, 1.0f, 5000.0f, "%.3f", ImGuiSliderFlags_Logarithmic);
             ImGui::SliderFloat("Debug Scaler", &constantBufferData.debug_scaler, 0.25f, 4.0f, "%.3f", ImGuiSliderFlags_Logarithmic);
             // basic profiling
 
@@ -1056,6 +1057,18 @@ int main(void)
         cameraPos = cameraPos + (cameraForward * forwardSpeed);
         cameraPos = cameraPos + (cameraRight * strafeSpeed);
 
+        // if (cameraPos.x > worldSizeTerrainTilesW*terrainTileInWorldUnits) {
+        //     cameraPos.x = 0;
+        // } else if (cameraPos.x < 0) {
+        //     cameraPos.x = worldSizeTerrainTilesW*terrainTileInWorldUnits;
+        // }
+
+        // if (cameraPos.z > worldSizeTerrainTilesH*terrainTileInWorldUnits) {
+        //     cameraPos.z = 0;
+        // } else if (cameraPos.z < 0) {
+        //     cameraPos.z = worldSizeTerrainTilesH*terrainTileInWorldUnits;
+        // }
+
         // streaming architecture
         
 
@@ -1066,20 +1079,13 @@ int main(void)
         // programState.virtualCamPos.z += debugBoostSpeed*deltaTime;
 
 
-        programState.tileX = floor(cameraPos.x / 4096.0f);
-        programState.tileY = floor(cameraPos.z / 4096.0f);
+        programState.tileX = floor(cameraPos.x / terrainTileInWorldUnits);
+        programState.tileY = floor(cameraPos.z / terrainTileInWorldUnits);
 
-        v3 vcamOffset = {programState.tileX*4096.0f, 0, programState.tileY*4096.0f};
+        v3 vcamOffset = {programState.tileX*terrainTileInWorldUnits, 0, programState.tileY*terrainTileInWorldUnits};
         programState.virtualCamPos = cameraPos - vcamOffset;
 
-        if (programState.tileX >= worldSizeTerrainTilesW) {
-            programState.tileX = 0;
-            // programState.virtualCamPos.x = 0;
-        }
-        if (programState.tileY >= worldSizeTerrainTilesH) {
-            programState.tileY = 0;
-            // programState.virtualCamPos.z = 0;
-        }
+        //TODO: fix somehow not able to see beyond x=15 and around y=5 in world tilemap
 
         bool updateThisFrame = false;
         if (programState.tileX != lastTileX)

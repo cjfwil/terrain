@@ -541,6 +541,8 @@ struct d3d12_bindless_texture
         if (metadata.width != width || metadata.height != height || metadata.format != format)
         {
             SDL_Log("update_data: DDS mismatch (size/format)");
+            SDL_Log("Expected: %d, %d, %d", width, height, format);
+            SDL_Log("Retrieved: %d, %d, %d", metadata.width, metadata.height, metadata.format);
             return false;
         }
 
