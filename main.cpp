@@ -134,6 +134,8 @@ static struct
     Uint64 msElapsedSinceSDLInit;
     uint64_t ticksElapsed = 0;
     double timeElapsed = 0;
+    int tileX = 0;
+    int tileY = 0;
     bool fullscreen;
     bool isRunning;
 } programState;
@@ -854,6 +856,8 @@ int main(void)
 
             ImGui::Text("Terrain Dimension vertices: %d", constantBufferData.terrainGridDimensionInVertices);
 
+            ImGui::Text("tileX: %d, tileY: %d", programState.tileX, programState.tileY);
+
             static int planetScaleRatioDenom = 50;
             ImGui::SliderInt("Planet Scale 1:X", &planetScaleRatioDenom, 1, 100);
             constantBufferData.planetScaleRatio = 1.0f / (float)planetScaleRatioDenom;
@@ -1051,23 +1055,64 @@ int main(void)
         cameraPos = cameraPos + (cameraRight * strafeSpeed);
 
         // streaming architecture
-        static bool a = false;
-        if (programState.timeElapsed > 3.0f && !a)
+        static v3 virtualCamPos = {};
+
+        int lastTileX = programState.tileX;
+        int lastTileY = programState.tileY;
+
+        virtualCamPos.x += debugBoostSpeed * deltaTime;
+        virtualCamPos.z += debugBoostSpeed*deltaTime;
+
+        programState.tileX = floor(virtualCamPos.x / 4096.0f);
+        programState.tileY = floor(virtualCamPos.z / 4096.0f);
+
+        if (programState.tileX >= worldSizeTerrainTilesW) {
+            programState.tileX = 0;
+            virtualCamPos.x = 0;
+        }
+        if (programState.tileY >= worldSizeTerrainTilesH) {
+            programState.tileY = 0;
+            virtualCamPos.z = 0;
+        }
+
+        bool updateThisFrame = false;
+        if (programState.tileX != lastTileX || programState.tileY != lastTileY)
         {
-            for (int i = 0; i < 16; i++)
+            updateThisFrame = true;
+        }
+
+        uint32_t endingSegmentX = SDL_clamp(programState.tileX + visibleTileWidth, 0, worldSizeTerrainTilesW);
+        uint32_t endingSegmentY = SDL_clamp(programState.tileY + visibleTileWidth, 0, worldSizeTerrainTilesH);
+
+        if (updateThisFrame)
+        {
+            uint32_t indexVisibleTiles = 0;
+            for (uint32_t y = programState.tileY; y < endingSegmentY; ++y)
             {
-                if (albedoTiles[i].update_data(albedoFilenames[i]))
+                for (uint32_t x = programState.tileX; x < endingSegmentX; ++x)
                 {
-                    SDL_Log("Albedo filename loaded: %ls", albedoFilenames[i]);     
-                    SDL_Log("albedoTiles[%d].texture = %p", i, albedoTiles[i].texture);               
+                    uint32_t fn_i = x + y * worldSizeTerrainTilesW;
+                    // heightTiles[indexVisibleTiles].loadFromDDS(heightmapFilenames[fn_i], indexVisibleTiles, false);
+                    // albedoTiles[indexVisibleTiles].loadFromDDS(albedoFilenames[fn_i], visibleTileNum + indexVisibleTiles + 1, true);
+                    heightTiles[indexVisibleTiles].update_data(heightmapFilenames[fn_i]);
+                    albedoTiles[indexVisibleTiles].update_data(albedoFilenames[fn_i]);
+                    indexVisibleTiles++;
                 }
-                else
-                {
-                    SDL_Log("Albedo filename not loaded");
-                }            
             }
-            a = true;
-        }        
+
+            // for (int i = 0; i < 16; i++)
+            // {
+            //     if (albedoTiles[i].update_data(albedoFilenames[i]))
+            //     {
+            //         SDL_Log("Albedo filename loaded: %ls", albedoFilenames[i]);
+            //         SDL_Log("albedoTiles[%d].texture = %p", i, albedoTiles[i].texture);
+            //     }
+            //     else
+            //     {
+            //         SDL_Log("Albedo filename not loaded");
+            //     }
+            // }
+        }
 
         QueryPerformanceCounter(&profiling.t1);
 
