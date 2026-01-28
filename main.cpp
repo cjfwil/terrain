@@ -134,6 +134,7 @@ static struct
     Uint64 msElapsedSinceSDLInit;
     uint64_t ticksElapsed = 0;
     double timeElapsed = 0;
+    v3 virtualCamPos = {};
     int tileX = 0;
     int tileY = 0;
     bool fullscreen;
@@ -874,6 +875,7 @@ int main(void)
 
             // camera info
             ImGui::Text("Camera Pos: %.2f, %.2f, %.2f", cameraPos.x, cameraPos.y, cameraPos.z);
+            ImGui::Text("Virtual Camera Pos: %.2f, %.2f, %.2f", programState.virtualCamPos.x, programState.virtualCamPos.y, programState.virtualCamPos.z);
             ImGui::Text("Camera Yaw: %.2f. Pitch %.2f", cameraYaw, cameraPitch);
 
             // options
@@ -1055,34 +1057,45 @@ int main(void)
         cameraPos = cameraPos + (cameraRight * strafeSpeed);
 
         // streaming architecture
-        static v3 virtualCamPos = {};
+        
 
         int lastTileX = programState.tileX;
         int lastTileY = programState.tileY;
 
-        virtualCamPos.x += debugBoostSpeed * deltaTime;
-        virtualCamPos.z += debugBoostSpeed*deltaTime;
+        // programState.virtualCamPos.x += debugBoostSpeed * deltaTime;
+        // programState.virtualCamPos.z += debugBoostSpeed*deltaTime;
 
-        programState.tileX = floor(virtualCamPos.x / 4096.0f);
-        programState.tileY = floor(virtualCamPos.z / 4096.0f);
+
+        programState.tileX = floor(cameraPos.x / 4096.0f);
+        programState.tileY = floor(cameraPos.z / 4096.0f);
+
+        v3 vcamOffset = {programState.tileX*4096.0f, 0, programState.tileY*4096.0f};
+        programState.virtualCamPos = cameraPos - vcamOffset;
 
         if (programState.tileX >= worldSizeTerrainTilesW) {
             programState.tileX = 0;
-            virtualCamPos.x = 0;
+            // programState.virtualCamPos.x = 0;
         }
         if (programState.tileY >= worldSizeTerrainTilesH) {
             programState.tileY = 0;
-            virtualCamPos.z = 0;
+            // programState.virtualCamPos.z = 0;
         }
 
         bool updateThisFrame = false;
-        if (programState.tileX != lastTileX || programState.tileY != lastTileY)
+        if (programState.tileX != lastTileX)
         {
+            // programState.virtualCamPos.x += (programState.tileX - lastTileX) * 4095.0f;
+            lastTileX = programState.tileX;
+            updateThisFrame = true;
+        }
+        if ( programState.tileY != lastTileY) {
+            // programState.virtualCamPos.z -= 4095.0f;
+            lastTileY = programState.tileY;
             updateThisFrame = true;
         }
 
-        uint32_t endingSegmentX = SDL_clamp(programState.tileX + visibleTileWidth, 0, worldSizeTerrainTilesW);
-        uint32_t endingSegmentY = SDL_clamp(programState.tileY + visibleTileWidth, 0, worldSizeTerrainTilesH);
+        endingSegmentX = SDL_clamp(programState.tileX + visibleTileWidth, 0, worldSizeTerrainTilesW);
+        endingSegmentY = SDL_clamp(programState.tileY + visibleTileWidth, 0, worldSizeTerrainTilesH);
 
         if (updateThisFrame)
         {
@@ -1117,12 +1130,12 @@ int main(void)
         QueryPerformanceCounter(&profiling.t1);
 
         // main matrix update
-        v3 atPos = cameraPos + cameraForward;
+        v3 atPos = programState.virtualCamPos + cameraForward;
         // main view and projection matrices setup
         DirectX::XMMATRIX world = DirectX::XMMatrixIdentity();
 
         // DirectX::XMVECTOR eye = DirectX::XMVectorSet(cameraPos.x, cameraPos.y, cameraPos.z, 0.0f);
-        DirectX::XMVECTOR eye = DirectX::XMVectorSet(cameraPos.x, cameraPos.y, cameraPos.z, 0.0f);
+        DirectX::XMVECTOR eye = DirectX::XMVectorSet(programState.virtualCamPos.x, programState.virtualCamPos.y, programState.virtualCamPos.z, 0.0f);
         constantBufferData.cameraPos = eye;
         DirectX::XMVECTOR at = DirectX::XMVectorSet(atPos.x, atPos.y, atPos.z, 0.0f);
         DirectX::XMVECTOR up = DirectX::XMVectorSet(cameraUp.x, cameraUp.y, cameraUp.z, 0.0f);
@@ -1237,8 +1250,8 @@ int main(void)
         v3 cmFwd2D = cameraForward;
         cmFwd2D.y = 0;                     // for ground level
         cmFwd2D = v3::normalised(cmFwd2D); // TODO: note debug scaler here
-
-        v3 clipmapCentreLocation = cameraPos + cmFwd2D * forwardDistance;
+        
+        v3 clipmapCentreLocation = programState.virtualCamPos + cmFwd2D * forwardDistance;
         // v3 clipmapCentreLocation = cameraPos + cmFwd2D * (terrainGridDimensionInWorldUnits / 2);
 
         for (int i = 0; i < activeClipmapRings; ++i)
