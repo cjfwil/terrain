@@ -516,6 +516,177 @@ struct d3d12_bindless_texture
 
         return true;
     }
+
+    // ...existing code...
+    bool update_data(const wchar_t *filename)
+    {
+        if (!texture)
+            return false;
+
+        DirectX::ScratchImage image;
+        DirectX::TexMetadata metadata;
+
+        HRESULT hr = DirectX::LoadFromDDSFile(
+            filename,
+            DirectX::DDS_FLAGS_NONE,
+            &metadata,
+            image);
+
+        if (FAILED(hr))
+        {
+            errhr(L"LoadFromDDSFile failed", hr);
+            return false;
+        }
+
+        if (metadata.width != width || metadata.height != height || metadata.format != format)
+        {
+            SDL_Log("update_data: DDS mismatch (size/format)");
+            return false;
+        }
+
+        const DirectX::Image *imgs = image.GetImages();
+        UINT mipCount = mipLevels;
+
+        D3D12_SUBRESOURCE_DATA subresources[32];
+        for (UINT i = 0; i < mipCount; i++)
+        {
+            subresources[i].pData = imgs[i].pixels;
+            subresources[i].RowPitch = (LONG_PTR)imgs[i].rowPitch;
+            subresources[i].SlicePitch = (LONG_PTR)imgs[i].slicePitch;
+        }
+
+        // Prepare an upload heap size
+        UINT64 uploadSize = GetRequiredIntermediateSize(texture, 0, mipCount);
+
+        // Create temporary upload heap
+        CD3DX12_HEAP_PROPERTIES heapPropsUpload(D3D12_HEAP_TYPE_UPLOAD);
+        auto uploadDesc = CD3DX12_RESOURCE_DESC::Buffer(uploadSize);
+
+        ID3D12Resource *localUploadHeap = nullptr;
+        hr = renderState.device->CreateCommittedResource(
+            &heapPropsUpload,
+            D3D12_HEAP_FLAG_NONE,
+            &uploadDesc,
+            D3D12_RESOURCE_STATE_GENERIC_READ,
+            nullptr,
+            IID_PPV_ARGS(&localUploadHeap));
+        if (FAILED(hr))
+        {
+            errhr(L"CreateCommittedResource (update upload buffer) failed", hr);
+            return false;
+        }
+
+        // Create temporary command allocator + command list
+        ID3D12CommandAllocator *tmpAlloc = nullptr;
+        hr = renderState.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&tmpAlloc));
+        if (FAILED(hr))
+        {
+            errhr("CreateCommandAllocator (update) failed", hr);
+            localUploadHeap->Release();
+            return false;
+        }
+
+        ID3D12GraphicsCommandList *tmpList = nullptr;
+        hr = renderState.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, tmpAlloc, nullptr, IID_PPV_ARGS(&tmpList));
+        if (FAILED(hr))
+        {
+            errhr("CreateCommandList (update) failed", hr);
+            tmpAlloc->Release();
+            localUploadHeap->Release();
+            return false;
+        }
+
+        // Transition texture to COPY_DEST if needed
+        auto toCopy = CD3DX12_RESOURCE_BARRIER::Transition(
+            texture,
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+            D3D12_RESOURCE_STATE_COPY_DEST);
+        tmpList->ResourceBarrier(1, &toCopy);
+
+        // Upload subresources using the temporary command list
+        UpdateSubresources(tmpList, texture, localUploadHeap, 0, 0, mipCount, subresources);
+
+        // Transition back to PIXEL_SHADER_RESOURCE
+        auto toShader = CD3DX12_RESOURCE_BARRIER::Transition(
+            texture,
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        tmpList->ResourceBarrier(1, &toShader);
+
+        hr = tmpList->Close();
+        if (FAILED(hr))
+        {
+            errhr("Close tmp update command list failed", hr);
+            tmpList->Release();
+            tmpAlloc->Release();
+            localUploadHeap->Release();
+            return false;
+        }
+
+        // Execute and wait for completion
+        ID3D12CommandList *lists[] = {tmpList};
+        renderState.commandQueue->ExecuteCommandLists(1, lists);
+
+        // create a fence and wait
+        ID3D12Fence *fence = nullptr;
+        hr = renderState.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence));
+        if (FAILED(hr))
+        {
+            errhr("CreateFence (update) failed", hr);
+            tmpList->Release();
+            tmpAlloc->Release();
+            localUploadHeap->Release();
+            return false;
+        }
+
+        HANDLE event = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+        if (!event)
+        {
+            err("CreateEvent failed (update)");
+            fence->Release();
+            tmpList->Release();
+            tmpAlloc->Release();
+            localUploadHeap->Release();
+            return false;
+        }
+
+        UINT64 fenceVal = 1;
+        hr = renderState.commandQueue->Signal(fence, fenceVal);
+        if (FAILED(hr))
+        {
+            errhr("Signal (update) failed", hr);
+            CloseHandle(event);
+            fence->Release();
+            tmpList->Release();
+            tmpAlloc->Release();
+            localUploadHeap->Release();
+            return false;
+        }
+
+        hr = fence->SetEventOnCompletion(fenceVal, event);
+        if (FAILED(hr))
+        {
+            errhr("SetEventOnCompletion (update) failed", hr);
+            CloseHandle(event);
+            fence->Release();
+            tmpList->Release();
+            tmpAlloc->Release();
+            localUploadHeap->Release();
+            return false;
+        }
+
+        WaitForSingleObject(event, INFINITE);
+
+        CloseHandle(event);
+        fence->Release();
+
+        // cleanup
+        tmpList->Release();
+        tmpAlloc->Release();
+        localUploadHeap->Release();
+
+        return true;
+    }    
 };
 
 struct d3d12_texture_array
@@ -882,7 +1053,7 @@ struct d3d12_constant_buffer
     UINT constantBufferSize = 256U;
     UINT *CbvDataBegin = nullptr;
 
-    bool create(UINT _constantBufferSize = 256U, UINT dataMultiples = 1, UINT cbvIndex=0)
+    bool create(UINT _constantBufferSize = 256U, UINT dataMultiples = 1, UINT cbvIndex = 0)
     {
         constantBufferSize = (_constantBufferSize + 255) & ~255u; // 256-byte align;
         // constantBufferSize = _constantBufferSize;

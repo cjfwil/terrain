@@ -153,11 +153,10 @@ float4 PSMain(VSOut IN) : SV_Target
     const float3 lightColor = float3(1.0f, 0.98f, 0.9f);
     const float ambient = 0.2f;
 
-    // uint albedoIndex = IN.texIndex + (tileCount-1);
-    // uint albedoIndex = albedoSRV[IN.texIndex];
+    
+    
     uint albedoIndex = albedoSRV[IN.texIndex].r;
-    // uint albedoIndex = IN.texIndex;
-
+    
     // float4 sampleData = g_albedoTex[albedoIndex].Sample(g_sampler, IN.uvLocal);
     float4 sampleData = g_albedoTex[albedoIndex].Sample(g_sampler, IN.uvLocal);
 

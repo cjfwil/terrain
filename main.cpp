@@ -642,9 +642,6 @@ int main(void)
             uint32_t fn_i = x + y * worldSizeTerrainTilesW;
             heightTiles[indexVisibleTiles].loadFromDDS(heightmapFilenames[fn_i], indexVisibleTiles, false);
             albedoTiles[indexVisibleTiles].loadFromDDS(albedoFilenames[fn_i], visibleTileNum + indexVisibleTiles + 1, true);
-            SDL_Log("Indexing World Height tile %u at SRV slot %u\n", fn_i, indexVisibleTiles);
-            SDL_Log("Indexing World Albedo tile %u -> SRV slot %u\n", fn_i, visibleTileNum + indexVisibleTiles + 1);
-
             indexVisibleTiles++;
         }
     }
@@ -853,6 +850,7 @@ int main(void)
             ImGui::Text("Application average %.3f ms/frame (%.2f FPS)",
                         1000.0f / ImGui::GetIO().Framerate,
                         ImGui::GetIO().Framerate);
+            ImGui::Text("Time Elapsed: %.3f s", programState.timeElapsed);
 
             ImGui::Text("Terrain Dimension vertices: %d", constantBufferData.terrainGridDimensionInVertices);
 
@@ -902,38 +900,57 @@ int main(void)
             }
 
             {
-                if (ImGui::CollapsingHeader("Terrain Streaming CB"))
+                if (ImGui::CollapsingHeader("Terrain Streaming Indirection Tables"))
                 {
-                    ImGui::Text("Height SRV Indirection Table");
+                    ImGui::Text("Height SRV (4x4)");
                     ImGui::Separator();
 
-                    for (int i = 0; i < 16; ++i)
+                    for (int y = 0; y < 4; ++y)
                     {
-                        // Only edit the .x component — the rest are padding
-                        int value = static_cast<int>(terrainStreamingCBData.heightSRV[i].x);
-
-                        ImGui::PushID(i);
-                        if (ImGui::DragInt("Height", &value, 1.0f, 0, 255))
+                        for (int x = 0; x < 4; ++x)
                         {
-                            terrainStreamingCBData.heightSRV[i].x = static_cast<uint32_t>(value);
+                            int idx = y * 4 + x;
+                            int value = static_cast<int>(terrainStreamingCBData.heightSRV[idx].x);
+
+                            ImGui::PushID(idx);
+                            ImGui::SetNextItemWidth(40.0f);
+
+                            if (ImGui::InputInt("##h", &value, 0, 0))
+                            {
+                                terrainStreamingCBData.heightSRV[idx].x = static_cast<uint32_t>(value);
+                            }
+
+                            ImGui::PopID();
+                            ImGui::SameLine();
                         }
-                        ImGui::PopID();
+                        ImGui::NewLine();
                     }
 
                     ImGui::Spacing();
-                    ImGui::Text("Albedo SRV Indirection Table");
+                    ImGui::Spacing();
+
+                    ImGui::Text("Albedo SRV (4x4)");
                     ImGui::Separator();
 
-                    for (int i = 0; i < 16; ++i)
+                    for (int y = 0; y < 4; ++y)
                     {
-                        int value = static_cast<int>(terrainStreamingCBData.albedoSRV[i].x);
-
-                        ImGui::PushID(1000 + i);
-                        if (ImGui::DragInt("Albedo", &value, 1.0f, 0, 255))
+                        for (int x = 0; x < 4; ++x)
                         {
-                            terrainStreamingCBData.albedoSRV[i].x = static_cast<uint32_t>(value);
+                            int idx = y * 4 + x;
+                            int value = static_cast<int>(terrainStreamingCBData.albedoSRV[idx].x);
+
+                            ImGui::PushID(1000 + idx);
+                            ImGui::SetNextItemWidth(40.0f);
+
+                            if (ImGui::InputInt("##a", &value, 0, 0))
+                            {
+                                terrainStreamingCBData.albedoSRV[idx].x = static_cast<uint32_t>(value);
+                            }
+
+                            ImGui::PopID();
+                            ImGui::SameLine();
                         }
-                        ImGui::PopID();
+                        ImGui::NewLine();
                     }
                 }
             }
@@ -1032,6 +1049,25 @@ int main(void)
 
         cameraPos = cameraPos + (cameraForward * forwardSpeed);
         cameraPos = cameraPos + (cameraRight * strafeSpeed);
+
+        // streaming architecture
+        static bool a = false;
+        if (programState.timeElapsed > 3.0f && !a)
+        {
+            for (int i = 0; i < 16; i++)
+            {
+                if (albedoTiles[i].update_data(albedoFilenames[i]))
+                {
+                    SDL_Log("Albedo filename loaded: %ls", albedoFilenames[i]);     
+                    SDL_Log("albedoTiles[%d].texture = %p", i, albedoTiles[i].texture);               
+                }
+                else
+                {
+                    SDL_Log("Albedo filename not loaded");
+                }            
+            }
+            a = true;
+        }        
 
         QueryPerformanceCounter(&profiling.t1);
 
