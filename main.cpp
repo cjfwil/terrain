@@ -631,7 +631,7 @@ int main(void)
     d3d12_bindless_texture heightTiles[visibleTileNum];
     d3d12_bindless_texture albedoTiles[visibleTileNum];
 
-    uint32_t startingSegmentX = 6;
+    uint32_t startingSegmentX = 0;
     uint32_t startingSegmentY = 0;
 
     uint32_t endingSegmentX = SDL_clamp(startingSegmentX + visibleTileWidth, 0, worldSizeTerrainTilesW);

@@ -46,7 +46,7 @@ VSOut VSMain(uint2 position: POSITION)
     float2 virtualDim = float2(tileDim * tilesPerRow, tileDim * tilesPerCol);
 
     float2 pUv = wp.xz + 0.5f + ringOffset;
-    float2 uvGlobal = float2(1.0 - pUv.x, pUv.y) / virtualDim;
+    float2 uvGlobal = float2(pUv.x, pUv.y) / virtualDim;
 
     float2 tilePos = float2(uvGlobal.x * tilesPerRow,
                             uvGlobal.y * tilesPerCol);
