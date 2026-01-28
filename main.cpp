@@ -1104,6 +1104,7 @@ int main(void)
         cameraPos = cameraPos + (cameraForward * forwardSpeed);
         cameraPos = cameraPos + (cameraRight * strafeSpeed);
 
+        // ...existing code...
         // streaming architecture
         int lastTileX = programState.tileX;
         int lastTileY = programState.tileY;
@@ -1111,8 +1112,25 @@ int main(void)
         programState.tileX = floor(cameraPos.x / terrainTileInWorldUnits);
         programState.tileY = floor(cameraPos.z / terrainTileInWorldUnits);
 
+        // v3 vcamOffset = {programState.tileX * terrainTileInWorldUnits, 0, programState.tileY * terrainTileInWorldUnits};
+        // programState.virtualCamPos = cameraPos - vcamOffset;
+        // compute base tile for camera, then pick a start tile so camera is centered in the visible window
+        int baseTileX = (int)floor(cameraPos.x / terrainTileInWorldUnits);
+        int baseTileY = (int)floor(cameraPos.z / terrainTileInWorldUnits);
+        int halfW = (int)(visibleTileWidth / 2);
+
+        int startTileX = baseTileX - halfW;
+        int startTileY = baseTileY - halfW;
+        // clamp start so the visible window is always fully inside the world bounds
+        startTileX = SDL_clamp(startTileX, 0, (int)worldSizeTerrainTilesW - (int)visibleTileWidth);
+        startTileY = SDL_clamp(startTileY, 0, (int)worldSizeTerrainTilesH - (int)visibleTileWidth);
+
+        programState.tileX = startTileX;
+        programState.tileY = startTileY;
+
         v3 vcamOffset = {programState.tileX * terrainTileInWorldUnits, 0, programState.tileY * terrainTileInWorldUnits};
         programState.virtualCamPos = cameraPos - vcamOffset;
+        
 
         bool updateThisFrame = false;
         if (programState.tileX != lastTileX)
@@ -1125,7 +1143,7 @@ int main(void)
             lastTileY = programState.tileY;
             updateThisFrame = true;
         }
-
+        
         endingSegmentX = SDL_clamp(programState.tileX + visibleTileWidth, 0, worldSizeTerrainTilesW);
         endingSegmentY = SDL_clamp(programState.tileY + visibleTileWidth, 0, worldSizeTerrainTilesH);
 
