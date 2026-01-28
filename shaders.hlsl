@@ -10,6 +10,12 @@ struct VSOut
     uint texIndex : TEXCOORD4;
 };
 
+cbuffer TerrainStreamingCB : register(b1)
+{
+    uint4 heightSRV[16];
+    uint4 albedoSRV[16];
+};
+
 Texture2D<float> g_heightTex[] : register(t0, space1);
 Texture2D<float4> g_albedoTex[] : register(t1, space1);
 
@@ -21,21 +27,6 @@ float hash21(float2 p)
     p += dot(p, p + 45.32);
     return frac(p.x * p.y);
 }
-
-// Hardcoded descriptor mapping for testing TODO: REMOVE
-static const uint heightSRV[16] = {
-    0, 1, 2, 3,
-    4, 5, 6, 7,
-    8, 9, 10, 11,
-    12, 13, 14, 15
-};
-
-static const uint albedoSRV[16] = {
-    16, 17, 18, 19,
-    20, 21, 22, 23,
-    24, 25, 26, 27,
-    28, 29, 30, 31
-};
 
 VSOut VSMain(uint2 position: POSITION)
 {
@@ -69,7 +60,7 @@ VSOut VSMain(uint2 position: POSITION)
     uint texIndex = (uint)(iy * (int)tilesPerRow + ix);
 
     // uint heightIndex = texIndex;
-    uint heightIndex = heightSRV[texIndex];
+    uint heightIndex = heightSRV[texIndex].r;
 
     // Local UV inside that tile
     float2 uvLocal;
@@ -136,13 +127,21 @@ VSOut VSMain(uint2 position: POSITION)
     return o;
 }
 
+// Hardcoded descriptor mapping for testing TODO: REMOVE when working
+// static const uint _heightSRV[16] = {
+//     0, 1, 2, 3,
+//     4, 5, 6, 7,
+//     8, 9, 10, 11,
+//     12, 13, 14, 15};
+
 // float4 PSMain(VSOut IN) : SV_Target
 // {
 //     // IN.texIndex should be 0..(visibleTilesWidth*visibleTilesWidth - 1)
-//     float maxIndex = (float)(tileCount - 1);
+//     // float maxIndex = (float)(tileCount - 1);
+//     float maxIndex = 15.0f;
 
 //     // Normalise to 0..1
-//     float v = (float)IN.texIndex / maxIndex;
+//     float v = (float)(heightSRV[IN.texIndex]) / maxIndex;
 
 //     // Output as grayscale
 //     return float4(v, v, v, 1.0f);
@@ -155,10 +154,12 @@ float4 PSMain(VSOut IN) : SV_Target
     const float ambient = 0.2f;
 
     // uint albedoIndex = IN.texIndex + (tileCount-1);
-    uint albedoIndex = albedoSRV[IN.texIndex];    
+    // uint albedoIndex = albedoSRV[IN.texIndex];
+    uint albedoIndex = albedoSRV[IN.texIndex].r;
+    // uint albedoIndex = IN.texIndex;
 
-    float4 sampleData =
-        g_albedoTex[albedoIndex].Sample(g_sampler, IN.uvLocal);
+    // float4 sampleData = g_albedoTex[albedoIndex].Sample(g_sampler, IN.uvLocal);
+    float4 sampleData = g_albedoTex[albedoIndex].Sample(g_sampler, IN.uvLocal);
 
     float wetness = clamp(IN.water.y, 0.0f, 1.0f);
     float blendStrength = 0.6f;

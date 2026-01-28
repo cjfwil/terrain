@@ -46,12 +46,12 @@ struct dxc_context
     }
 };
 
-
 static struct
 {
     DirectX::XMFLOAT4X4 world;
     DirectX::XMFLOAT4X4 view; // 4 x 4 matrix has 16 entries. 4 bytes per entry -> 64 bytes total
     DirectX::XMFLOAT4X4 projection;
+
     DirectX::XMVECTOR cameraPos;
     DirectX::XMFLOAT2 ringOffset;
     double timeElapsed;
@@ -60,7 +60,7 @@ static struct
     float planetScaleRatio = 1.0f / 75.0f;
     int terrainGridDimensionInVertices;
     float debug_scaler = 1.0f;
-    
+
     unsigned int tileCount;
     unsigned int visibleTileWidth;
 } constantBufferData;
@@ -153,8 +153,6 @@ static struct
     ID3D12RootSignature *rootSignature = nullptr;
     ID3D12Fence *fence = nullptr;
     ID3D12GraphicsCommandList *commandList = nullptr;
-
-    ID3D12Resource *constantBuffer = nullptr;
 
     ID3D12GraphicsCommandList *bundle = nullptr;
     const DXGI_FORMAT rtvFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
@@ -390,15 +388,15 @@ struct d3d12_texture_2d
 
 struct d3d12_bindless_texture
 {
-    ID3D12Resource* texture;
-    ID3D12Resource* uploadHeap;
+    ID3D12Resource *texture;
+    ID3D12Resource *uploadHeap;
     UINT descriptorIndex;
     UINT mipLevels;
     DXGI_FORMAT format;
     UINT width;
     UINT height;
 
-    bool loadFromDDS(const wchar_t* filename, UINT srvIndex, bool useMips)
+    bool loadFromDDS(const wchar_t *filename, UINT srvIndex, bool useMips)
     {
         texture = nullptr;
         uploadHeap = nullptr;
@@ -453,7 +451,7 @@ struct d3d12_bindless_texture
         }
 
         // --- Prepare subresources (no std::vector) ---
-        const DirectX::Image* imgs = image.GetImages();
+        const DirectX::Image *imgs = image.GetImages();
 
         D3D12_SUBRESOURCE_DATA subresources[32]; // supports up to 32 mips
         UINT count = mipLevels;
@@ -499,7 +497,7 @@ struct d3d12_bindless_texture
             texture,
             D3D12_RESOURCE_STATE_COPY_DEST,
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
-            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
         renderState.commandList->ResourceBarrier(1, &barrier);
 
@@ -519,7 +517,6 @@ struct d3d12_bindless_texture
         return true;
     }
 };
-
 
 struct d3d12_texture_array
 {
@@ -875,5 +872,57 @@ struct d3d12_pipeline_state
             return false;
         }
         return true;
+    }
+};
+
+struct d3d12_constant_buffer
+{
+    ID3D12Resource *constantBuffer = nullptr;
+
+    UINT constantBufferSize = 256U;
+    UINT *CbvDataBegin = nullptr;
+
+    bool create(UINT _constantBufferSize = 256U, UINT dataMultiples = 1, UINT cbvIndex=0)
+    {
+        constantBufferSize = (_constantBufferSize + 255) & ~255u; // 256-byte align;
+        // constantBufferSize = _constantBufferSize;
+        const UINT TotalCBSize = constantBufferSize * dataMultiples;
+        CD3DX12_HEAP_PROPERTIES heapPropsUpload(D3D12_HEAP_TYPE_UPLOAD);
+        CD3DX12_RESOURCE_DESC constantBufferDesc = CD3DX12_RESOURCE_DESC::Buffer(TotalCBSize);
+        HRESULT hr = renderState.device->CreateCommittedResource(
+            &heapPropsUpload,
+            D3D12_HEAP_FLAG_NONE,
+            &constantBufferDesc,
+            D3D12_RESOURCE_STATE_GENERIC_READ,
+            nullptr,
+            IID_PPV_ARGS(&constantBuffer));
+        if (FAILED(hr))
+        {
+            errhr("CreateCommittedResource failed", hr);
+            return false;
+        }
+
+        D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDesc = {};
+        cbvDesc.BufferLocation = constantBuffer->GetGPUVirtualAddress();
+        cbvDesc.SizeInBytes = constantBufferSize;
+        // renderState.device->CreateConstantBufferView(&cbvDesc, renderState.srvHeap->GetCPUDescriptorHandleForHeapStart());
+
+        // auto handle = renderState.srvHeap->GetCPUDescriptorHandleForHeapStart();
+        // handle.ptr += renderState.cbvSrvDescriptorSize * cbvIndex; // 0 for scene, 1 for terrain, etc.
+        // renderState.device->CreateConstantBufferView(&cbvDesc, handle);
+
+        // CD3DX12_RANGE readRangeCBV(0, 0);
+        // constantBuffer->Map(0, &readRangeCBV, reinterpret_cast<void **>(&CbvDataBegin));
+        // memcpy(CbvDataBegin, &constantBufferData, sizeof(constantBufferData));
+
+        return true;
+    }
+
+    void upload(void *data, size_t size)
+    {
+        CD3DX12_RANGE readRangeCBV(0, 0);
+        constantBuffer->Map(0, &readRangeCBV, reinterpret_cast<void **>(&CbvDataBegin));
+        memcpy(CbvDataBegin, data, size);
+        // constantBuffer->Unmap();
     }
 };

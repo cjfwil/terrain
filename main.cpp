@@ -410,9 +410,10 @@ int main(void)
                   D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE); // volatile is fine for bindless
 
     // Root parameters
-    CD3DX12_ROOT_PARAMETER1 rootParameters[2];
-    rootParameters[0].InitAsConstantBufferView(0); // const buffer
-    rootParameters[1].InitAsDescriptorTable(1, &srvRange, D3D12_SHADER_VISIBILITY_ALL);
+    CD3DX12_ROOT_PARAMETER1 rootParameters[3];
+    rootParameters[0].InitAsConstantBufferView(0); // b0 sceneCB
+    rootParameters[1].InitAsConstantBufferView(1); // b1 terrainStreamingCB
+    rootParameters[2].InitAsDescriptorTable(1, &srvRange, D3D12_SHADER_VISIBILITY_ALL);
 
     // TODO: abstract out into reusable
     D3D12_STATIC_SAMPLER_DESC sampler = {};
@@ -467,13 +468,6 @@ int main(void)
         err("Failed to create sky shader pair");
         return 1;
     }
-
-    // old mesh stuff
-    // D3D12_INPUT_ELEMENT_DESC inputElementDesc[] =
-    //     {
-    //         {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
-    //         {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
-    //         {"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 20, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0}};
 
     // heightmap mesh stuff
     D3D12_INPUT_ELEMENT_DESC inputElementDesc[] =
@@ -565,34 +559,33 @@ int main(void)
     // TODO: make reusuable constant buffer stuff
 
     // create constant buffer
-    const UINT constantBufferSize = 512U;
-    static UINT *CbvDataBegin = nullptr;
+    // const UINT constantBufferSize = 256U;
 
-    const UINT TotalCBSize = constantBufferSize * maxClipmapRings;
+    d3d12_constant_buffer sceneCB = {};
+    sceneCB.create(sizeof(constantBufferData), maxClipmapRings, 0);
+    sceneCB.upload(&constantBufferData, sizeof(constantBufferData));
 
-    CD3DX12_HEAP_PROPERTIES heapPropsUpload(D3D12_HEAP_TYPE_UPLOAD);
-    CD3DX12_RESOURCE_DESC constantBufferDesc = CD3DX12_RESOURCE_DESC::Buffer(TotalCBSize);
-    hr = renderState.device->CreateCommittedResource(
-        &heapPropsUpload,
-        D3D12_HEAP_FLAG_NONE,
-        &constantBufferDesc,
-        D3D12_RESOURCE_STATE_GENERIC_READ,
-        nullptr,
-        IID_PPV_ARGS(&renderState.constantBuffer));
-    if (FAILED(hr))
+    struct
     {
-        errhr("CreateCommittedResource failed", hr);
-        return 1;
+        DirectX::XMUINT4 heightSRV[16];
+        DirectX::XMUINT4 albedoSRV[16];
+    } terrainStreamingCBData;
+
+    uint32_t index = 0;
+    for (unsigned int y = 0; y < 4; ++y)
+    {
+        for (unsigned int x = 0; x < 4; ++x)
+        {
+            unsigned int value = x + y * 4;
+            terrainStreamingCBData.heightSRV[index] = DirectX::XMUINT4(value, 0, 0, 0);
+            terrainStreamingCBData.albedoSRV[index] = DirectX::XMUINT4(16 + value, 0, 0, 0);
+            index++;
+        }
     }
 
-    D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDesc = {};
-    cbvDesc.BufferLocation = renderState.constantBuffer->GetGPUVirtualAddress();
-    cbvDesc.SizeInBytes = constantBufferSize;
-    renderState.device->CreateConstantBufferView(&cbvDesc, renderState.srvHeap->GetCPUDescriptorHandleForHeapStart());
-
-    CD3DX12_RANGE readRangeCBV(0, 0);
-    renderState.constantBuffer->Map(0, &readRangeCBV, reinterpret_cast<void **>(&CbvDataBegin));
-    memcpy(CbvDataBegin, &constantBufferData, sizeof(constantBufferData));
+    d3d12_constant_buffer terrainStreamingCB = {};
+    terrainStreamingCB.create(sizeof(terrainStreamingCBData), 1, 1);
+    terrainStreamingCB.upload(&terrainStreamingCBData, sizeof(terrainStreamingCBData));
 
     // CREATE BUNDLE
     hr = renderState.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_BUNDLE, renderState.bundleAllocator, terrainPSO.pipelineState, IID_PPV_ARGS(&renderState.bundle));
@@ -648,9 +641,9 @@ int main(void)
         {
             uint32_t fn_i = x + y * worldSizeTerrainTilesW;
             heightTiles[indexVisibleTiles].loadFromDDS(heightmapFilenames[fn_i], indexVisibleTiles, false);
-            albedoTiles[indexVisibleTiles].loadFromDDS(albedoFilenames[fn_i], visibleTileNum + indexVisibleTiles+1, true);
-            SDL_Log("Height tile %u -> slot %u\n", fn_i, indexVisibleTiles);
-            SDL_Log("Albedo tile %u -> slot %u\n", fn_i, visibleTileNum + indexVisibleTiles + 1);
+            albedoTiles[indexVisibleTiles].loadFromDDS(albedoFilenames[fn_i], visibleTileNum + indexVisibleTiles + 1, true);
+            SDL_Log("Indexing World Height tile %u at SRV slot %u\n", fn_i, indexVisibleTiles);
+            SDL_Log("Indexing World Albedo tile %u -> SRV slot %u\n", fn_i, visibleTileNum + indexVisibleTiles + 1);
 
             indexVisibleTiles++;
         }
@@ -907,6 +900,43 @@ int main(void)
             {
                 programState.isRunning = false;
             }
+
+            {
+                if (ImGui::CollapsingHeader("Terrain Streaming CB"))
+                {
+                    ImGui::Text("Height SRV Indirection Table");
+                    ImGui::Separator();
+
+                    for (int i = 0; i < 16; ++i)
+                    {
+                        // Only edit the .x component — the rest are padding
+                        int value = static_cast<int>(terrainStreamingCBData.heightSRV[i].x);
+
+                        ImGui::PushID(i);
+                        if (ImGui::DragInt("Height", &value, 1.0f, 0, 255))
+                        {
+                            terrainStreamingCBData.heightSRV[i].x = static_cast<uint32_t>(value);
+                        }
+                        ImGui::PopID();
+                    }
+
+                    ImGui::Spacing();
+                    ImGui::Text("Albedo SRV Indirection Table");
+                    ImGui::Separator();
+
+                    for (int i = 0; i < 16; ++i)
+                    {
+                        int value = static_cast<int>(terrainStreamingCBData.albedoSRV[i].x);
+
+                        ImGui::PushID(1000 + i);
+                        if (ImGui::DragInt("Albedo", &value, 1.0f, 0, 255))
+                        {
+                            terrainStreamingCBData.albedoSRV[i].x = static_cast<uint32_t>(value);
+                        }
+                        ImGui::PopID();
+                    }
+                }
+            }
         }
 
         // main loop main body
@@ -1028,7 +1058,8 @@ int main(void)
         DirectX::XMStoreFloat4x4(&constantBufferData.view, view);
         DirectX::XMStoreFloat4x4(&constantBufferData.projection, projection);
 
-        memcpy(CbvDataBegin, &constantBufferData, sizeof(constantBufferData));
+        sceneCB.upload(&constantBufferData, sizeof(constantBufferData));
+        terrainStreamingCB.upload(&terrainStreamingCBData, sizeof(terrainStreamingCBData));
 
         if (enableImgui)
             ImGui::Render();
@@ -1052,17 +1083,23 @@ int main(void)
         ID3D12DescriptorHeap *heaps[] = {renderState.srvHeap};
         renderState.commandList->SetDescriptorHeaps(_countof(heaps), heaps);
 
-        // renderState.commandList->SetGraphicsRootDescriptorTable(0, renderState.srvHeap->GetGPUDescriptorHandleForHeapStart()); // CBV
         renderState.commandList->SetGraphicsRootConstantBufferView(
             0, // root parameter index
-            renderState.constantBuffer->GetGPUVirtualAddress());
+            sceneCB.constantBuffer->GetGPUVirtualAddress());
+        renderState.commandList->SetGraphicsRootConstantBufferView(
+            1,
+            terrainStreamingCB.constantBuffer->GetGPUVirtualAddress());
 
-        // D3D12_GPU_DESCRIPTOR_HANDLE srvHandleGPU = renderState.srvHeap->GetGPUDescriptorHandleForHeapStart();
-        // srvHandleGPU.ptr += renderState.cbvSrvDescriptorSize;
-        // renderState.commandList->SetGraphicsRootDescriptorTable(1, srvHandleGPU);
         D3D12_GPU_DESCRIPTOR_HANDLE srvStart =
             renderState.srvHeap->GetGPUDescriptorHandleForHeapStart();
-        renderState.commandList->SetGraphicsRootDescriptorTable(1, srvStart);
+        renderState.commandList->SetGraphicsRootDescriptorTable(2, srvStart);
+
+        // 2 CBVs at slots 0 and 1
+        // const UINT numCBVs = 2;
+        // D3D12_GPU_DESCRIPTOR_HANDLE srvStart =
+        //     renderState.srvHeap->GetGPUDescriptorHandleForHeapStart();
+        // srvStart.ptr += renderState.cbvSrvDescriptorSize * numCBVs; // skip CBVs
+        // renderState.commandList->SetGraphicsRootDescriptorTable(2, srvStart);
 
         renderState.commandList->RSSetViewports(1, &viewport);
         renderState.commandList->RSSetScissorRects(1, &scissorRect);
@@ -1140,10 +1177,9 @@ int main(void)
 
             DirectX::XMStoreFloat4x4(&constantBufferData.world, DirectX::XMMatrixIdentity());
 
-            UINT cbOffset = i * constantBufferSize;
-
-            memcpy(reinterpret_cast<byte *>(CbvDataBegin) + cbOffset, &constantBufferData, sizeof(constantBufferData));
-            renderState.commandList->SetGraphicsRootConstantBufferView(0, renderState.constantBuffer->GetGPUVirtualAddress() + cbOffset);
+            UINT cbOffset = i * sceneCB.constantBufferSize;
+            memcpy(reinterpret_cast<byte *>(sceneCB.CbvDataBegin) + cbOffset, &constantBufferData, sizeof(constantBufferData));
+            renderState.commandList->SetGraphicsRootConstantBufferView(0, sceneCB.constantBuffer->GetGPUVirtualAddress() + cbOffset);
 
             UINT localIndexCount = clipmapRing.indexCount;
             if (i == 0)
