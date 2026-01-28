@@ -31,6 +31,14 @@
 #include <SDL3/SDL_thread.h>
 #include <SDL3_image/SDL_image.h>
 
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <queue>
+#include <vector>
+#include <string>
+#include <atomic>
+
 #pragma warning(pop)
 
 #include "src/metadata.h"
@@ -653,6 +661,45 @@ int main(void)
     constantBufferData.tileCount = visibleTileNum;
     // end of texture
 
+    // multithread stuff
+
+    // --- streaming threadpool (init) ---
+    std::mutex streamMutex;
+    std::condition_variable streamCv;
+    std::queue<std::function<void()>> streamJobs;
+    std::vector<std::thread> streamWorkers;
+    std::atomic<bool> streamStop(false);
+
+    unsigned int hwThreads = std::thread::hardware_concurrency();
+    unsigned int numWorkers = (hwThreads > 1) ? (hwThreads - 1) : 1;
+    streamWorkers.reserve(numWorkers);
+    for (unsigned int i = 0; i < numWorkers; ++i)
+    {
+        streamWorkers.emplace_back([&]()
+                                   {
+            while (true)
+            {
+                std::function<void()> job;
+                {
+                    std::unique_lock<std::mutex> lk(streamMutex);
+                    streamCv.wait(lk, [&] { return streamStop.load() || !streamJobs.empty(); });
+                    if (streamStop.load() && streamJobs.empty())
+                        return;
+                    job = std::move(streamJobs.front());
+                    streamJobs.pop();
+                }
+                try
+                {
+                    job();
+                }
+                catch (...)
+                {
+                    // swallow exceptions to keep worker alive; could log if desired
+                }
+            } });
+    }
+    // --- end threadpool init ---
+
     renderState.commandList->Close();
     ID3D12CommandList *commandListsSetup[] = {renderState.commandList};
     renderState.commandQueue->ExecuteCommandLists(_countof(commandListsSetup), commandListsSetup);
@@ -1057,45 +1104,24 @@ int main(void)
         cameraPos = cameraPos + (cameraForward * forwardSpeed);
         cameraPos = cameraPos + (cameraRight * strafeSpeed);
 
-        // if (cameraPos.x > worldSizeTerrainTilesW*terrainTileInWorldUnits) {
-        //     cameraPos.x = 0;
-        // } else if (cameraPos.x < 0) {
-        //     cameraPos.x = worldSizeTerrainTilesW*terrainTileInWorldUnits;
-        // }
-
-        // if (cameraPos.z > worldSizeTerrainTilesH*terrainTileInWorldUnits) {
-        //     cameraPos.z = 0;
-        // } else if (cameraPos.z < 0) {
-        //     cameraPos.z = worldSizeTerrainTilesH*terrainTileInWorldUnits;
-        // }
-
         // streaming architecture
-        
-
         int lastTileX = programState.tileX;
         int lastTileY = programState.tileY;
-
-        // programState.virtualCamPos.x += debugBoostSpeed * deltaTime;
-        // programState.virtualCamPos.z += debugBoostSpeed*deltaTime;
-
 
         programState.tileX = floor(cameraPos.x / terrainTileInWorldUnits);
         programState.tileY = floor(cameraPos.z / terrainTileInWorldUnits);
 
-        v3 vcamOffset = {programState.tileX*terrainTileInWorldUnits, 0, programState.tileY*terrainTileInWorldUnits};
+        v3 vcamOffset = {programState.tileX * terrainTileInWorldUnits, 0, programState.tileY * terrainTileInWorldUnits};
         programState.virtualCamPos = cameraPos - vcamOffset;
-
-        //TODO: fix somehow not able to see beyond x=15 and around y=5 in world tilemap
 
         bool updateThisFrame = false;
         if (programState.tileX != lastTileX)
         {
-            // programState.virtualCamPos.x += (programState.tileX - lastTileX) * 4095.0f;
             lastTileX = programState.tileX;
             updateThisFrame = true;
         }
-        if ( programState.tileY != lastTileY) {
-            // programState.virtualCamPos.z -= 4095.0f;
+        if (programState.tileY != lastTileY)
+        {
             lastTileY = programState.tileY;
             updateThisFrame = true;
         }
@@ -1111,27 +1137,26 @@ int main(void)
                 for (uint32_t x = programState.tileX; x < endingSegmentX; ++x)
                 {
                     uint32_t fn_i = x + y * worldSizeTerrainTilesW;
-                    // heightTiles[indexVisibleTiles].loadFromDDS(heightmapFilenames[fn_i], indexVisibleTiles, false);
-                    // albedoTiles[indexVisibleTiles].loadFromDDS(albedoFilenames[fn_i], visibleTileNum + indexVisibleTiles + 1, true);
-                    heightTiles[indexVisibleTiles].update_data(heightmapFilenames[fn_i]);
-                    albedoTiles[indexVisibleTiles].update_data(albedoFilenames[fn_i]);
+                    // copy filenames into wstrings for safe capture
+                    std::wstring hf = heightmapFilenames[fn_i];
+                    std::wstring af = albedoFilenames[fn_i];
+
+                    d3d12_bindless_texture *htex = &heightTiles[indexVisibleTiles];
+                    d3d12_bindless_texture *atex = &albedoTiles[indexVisibleTiles];
+
+                    {
+                        std::lock_guard<std::mutex> lk(streamMutex);
+                        streamJobs.emplace([htex, hf]()
+                                           { htex->update_data(hf.c_str()); });
+                        streamJobs.emplace([atex, af]()
+                                           { atex->update_data(af.c_str()); });
+                    }
                     indexVisibleTiles++;
                 }
             }
-
-            // for (int i = 0; i < 16; i++)
-            // {
-            //     if (albedoTiles[i].update_data(albedoFilenames[i]))
-            //     {
-            //         SDL_Log("Albedo filename loaded: %ls", albedoFilenames[i]);
-            //         SDL_Log("albedoTiles[%d].texture = %p", i, albedoTiles[i].texture);
-            //     }
-            //     else
-            //     {
-            //         SDL_Log("Albedo filename not loaded");
-            //     }
-            // }
+            streamCv.notify_all();
         }
+        // ...existing code...
 
         QueryPerformanceCounter(&profiling.t1);
 
@@ -1256,7 +1281,7 @@ int main(void)
         v3 cmFwd2D = cameraForward;
         cmFwd2D.y = 0;                     // for ground level
         cmFwd2D = v3::normalised(cmFwd2D); // TODO: note debug scaler here
-        
+
         v3 clipmapCentreLocation = programState.virtualCamPos + cmFwd2D * forwardDistance;
         // v3 clipmapCentreLocation = cameraPos + cmFwd2D * (terrainGridDimensionInWorldUnits / 2);
 
@@ -1418,5 +1443,16 @@ int main(void)
     //     terrainShaderPair.pixelShader->Release();
     // if (signature)
     //     signature->Release();
+    // filepath: c:\Work\Projects\terrain\main.cpp
+
+    // shutdown streaming workers
+    streamStop.store(true);
+    streamCv.notify_all();
+    for (auto &t : streamWorkers)
+    {
+        if (t.joinable())
+            t.join();
+    }
+    
     return (0);
 }
